@@ -1516,7 +1516,6 @@ do
     V.key=vr:AddKeyPicker({Text="Vehicle Fly Key",Flag="vehicle_fly_key",Default=Enum.KeyCode.V,Mode="Toggle",Callback=function() end})
     slider(vr,"Fly Speed",V,"FlySpeed","vehicle_fly_speed",1,250,60,1," studs/s")
     toggle(vr,"Vehicle Noclip",V,"Noclip","vehicle_noclip")
-    vr:AddLabel({Text="Local simulation; server corrections may still occur."})
     local tp=MainWindow:AddTab({Text="Turret Mods",Pages={"Settings"}})
     local ts=tp:AddSection({Title="Turret",Side="Left"})
     toggle(ts,"Turret RPM Changer",T,"RPM","turret_rpm_enabled")
@@ -1737,7 +1736,7 @@ do
     function R.Clear()
         for _,row in ipairs(R.rows) do if row.label then row.label:Destroy() end end
         R.rows={};R.byId={};R.count=0
-        if R.status then R.status.Text="Mensagens de rádio recebidas • 0 / 150" end
+        if R.status then R.status.Text="Received • 0 / 150" end
     end
     function R.Build()
         if R.gui then return end
@@ -1825,7 +1824,6 @@ do
     radioSection:AddToggle({Text="Radio Logger",Flag="visual_radio_logger",Default=false,Callback=function(enabled)
         R.Enabled=enabled;if enabled then R.Build() end;if R.gui then R.gui.Enabled=enabled end
     end})
-    radioSection:AddLabel({Text="[Canal] Jogador: mensagem. Apenas textos entregues ao cliente; sem transcrição de voz."})
     local destroyBeforeRadio=Combat.Destroy
     Combat.Destroy=function()
         R.active=false
