@@ -40,7 +40,7 @@ end
 -- Create window
 local MainWindow = Library:CreateWindow({
     Title = "Lean",
-    SubText = "V1.7 | BRM5",
+    SubText = "V1.9 | BRM5",
     IsMobile = false,
 
     -- "wave" | "rainbow" | "pulse" | "gradient"
@@ -76,7 +76,7 @@ local TriggerBotSettings = {
     Enabled=false,Targets={NPCs=true,Players=true},TeamCheck=false,VisibleCheck=true,
     MaxDistance=1000,ReactionTime=50,ShootTime=100,Magnetic=false,
 }
-local Combat = {
+local Combat: {[string]: any} = {
     Silent=Silent,Trigger=TriggerBotSettings,active=true,actors={},samples={},parts={},
     sticky=nil,target=nil,nextScan=0,lastShot=0,targetSince=0,triggerActor=nil,
     connections={},drawings={},hookState="Waiting for game adapter",
@@ -154,7 +154,11 @@ function Combat.Sync(force)
             local vel=Vector3.zero
             if old and old.model==a.Character and old.root==a.RootPart and now>old.time then
                 local measured=(a.Position-old.position)/(now-old.time)
-                if measured.Magnitude<300 then vel=old.velocity:Lerp(measured,.5) end
+                local dt=now-old.time
+                if dt<.35 and measured.Magnitude<300 then
+                    vel=old.velocity:Lerp(measured,1-math.exp(-dt*18))
+                    if measured.Magnitude<.1 then vel=Vector3.zero end
+                end
             end
             Combat.samples[a]={position=a.Position,time=now,velocity=vel,model=a.Character,root=a.RootPart}
             -- Keep velocity sampling frequent while limiting body-part discovery.
@@ -406,11 +410,25 @@ end
 -- Match BulletClassMultithread: constant muzzle speed and gravity 32.2.
 function Combat.Intercept(origin,point,velocity,speed,compensateDrop)
     if type(speed)~="number" or speed<=0 then return point,0 end
-    local time=(point-origin).Magnitude/speed
+    local relative=point-origin
+    local a=velocity:Dot(velocity)-speed*speed
+    local b=2*relative:Dot(velocity)
+    local c=relative:Dot(relative)
+    local time=relative.Magnitude/speed
+    local discriminant=b*b-4*a*c
+    if math.abs(a)<1e-6 then
+        if math.abs(b)>1e-6 and -c/b>0 then time=-c/b end
+    elseif discriminant>=0 then
+        local root=math.sqrt(discriminant)
+        local t1,t2=(-b-root)/(2*a),(-b+root)/(2*a)
+        if t1>0 and t2>0 then time=math.min(t1,t2)
+        elseif t1>0 then time=t1 elseif t2>0 then time=t2 end
+    end
+    time=math.clamp(time,0,5)
     local aim=point
     for _=1,6 do
         aim=point+velocity*time+Vector3.new(0,compensateDrop and 16.1*time*time or 0,0)
-        time=(aim-origin).Magnitude/speed
+        time=math.clamp((aim-origin).Magnitude/speed,0,5)
     end
     return aim,time
 end
@@ -423,7 +441,7 @@ function Combat.ShotFrame(weapon,cf,target)
     local ok,speed=pcall(bulletService.GetInfo,bulletService,tune.Caliber,tune.Barrel)
     if not ok or type(speed)~="number" or speed<=0 then return Combat.RedirectMuzzle(cf,target) end
     local sample=Combat.samples[target.actor]
-    local velocity=Silent.AutoPrediction and sample and sample.velocity or Vector3.zero
+    local velocity=Silent.AutoPrediction and sample and os.clock()-sample.time<.35 and sample.velocity or Vector3.zero
     local point=Combat.PartPosition(target.actor,target.part)
     local aim=Combat.Intercept(cf.Position,point,velocity,speed,Silent.BulletDropCompensation)
     local frame=Combat.RedirectMuzzle(cf,{position=aim})
@@ -1008,6 +1026,8 @@ do
             ctrl.IsSliding=false;ctrl.IsSprinting=false;ctrl._lastMovement=Vector2.zero
             local actor=ctrl._localActor
             actor.Platform=nil;actor.SimulatedPosition=target;actor.Grounded=grounded
+            actor.ForceNextPosition=target;actor.Position=target
+            if typeof(actor.CFrame)=="CFrame" then actor.CFrame=CFrame.new(target)*actor.CFrame.Rotation end
             actor.Sliding=false;actor.Sprinting=false
         end)
     end
@@ -1051,7 +1071,7 @@ end
 
 -- Gun controls: adapters are based on FirearmInventory, ViewmodelClass and Recoiler.
 local GunPage,GunVisualsPage=MainWindow:AddTab({Text="Gun",Pages={"Weapon","Visuals"}})
-local Gun={NoRecoil=false,InstantADS=false,NoSway=false,NoSpread=false,SpreadReduction=100,
+local Gun: {[string]: any}={NoRecoil=false,InstantADS=false,NoSway=false,NoSpread=false,SpreadReduction=100,
     UnlockModes=false,AutoReload=false,ForceHeadshot=false,active=true,originals={},hooks={},nextResolve=0,
     Visuals=false,Transparency=0,Material="Original",visualParts={},nextVisualScan=0,nextReload=0,
     WeaponColor=Color3.fromRGB(150,80,255),Tracers=false,TracerStyle="Lightning",
@@ -1102,7 +1122,7 @@ function Gun.UpdateTune()
     for old in pairs(Gun.originals) do
         if old~=tune then
             Gun.ApplyField(old,"Firemodes",false)
-            Gun.ApplyField(old,"Barrel_Spread",false)
+            for key in pairs(Gun.originals[old]) do Gun.ApplyField(old,key,false) end
             Gun.originals[old]=nil
         end
     end
@@ -1126,12 +1146,23 @@ function Gun.UpdateTune()
     if Gun.AutoReload and weapon.Equipped and not weapon._reloading and meta
         and (not weapon._mag or (weapon._mag.Capacity or 0)<=0)
         and (tune.NoChamber or not meta.Chamber) and os.clock()>=Gun.nextReload
-        and type(weapon._reload)=="function" then
+        and Gun.firearmClass and type(Gun.firearmClass._reload)=="function" and not Gun.reloadPending then
         Gun.nextReload=os.clock()+1
+        Gun.reloadPending=true
         task.defer(function()
             if Gun.active and Gun.AutoReload and weapon.Equipped and not weapon._reloading then
-                weapon:_reload(true)
+                local current=Combat.Service()
+                local a=current and current.Replicator and current.Replicator.LocalActor
+                if a and a._inventory and a._inventory[a._equipped]==weapon then
+                    local ok,mags=pcall(weapon._getMags,weapon)
+                    if ok and type(mags)=="table" and mags[1] then
+                        weapon._cancelReload=false
+                        local success,err=pcall(Gun.firearmClass._reload,weapon,true)
+                        Gun.reloadError=not success and tostring(err) or nil
+                    end
+                end
             end
+            Gun.reloadPending=false
         end)
     end
 end
@@ -1405,6 +1436,467 @@ GunTracerSection:AddSlider({Text="Duration",Flag="gun_tracer_duration",Min=.1,Ma
     Default=.6,Suffix=" s",Callback=function(v) Gun.TracerDuration=v end})
 GunTracerSection:AddSlider({Text="Width",Flag="gun_tracer_width",Min=.02,Max=.3,Rounding=.01,
     Default=.08,Callback=function(v) Gun.TracerWidth=v end})
+-- BRM5 adapters verified against place version 10120.
+do
+    local X: {[string]: any}={classes={},nextScan=0,shots=setmetatable({},{__mode="k"}),saved={},active=true}
+    local V: {[string]: any}={Speed=false,SpeedValue=80,Stability=false,FastStart=false,Fly=false,FlySpeed=60,Noclip=false,keyState={}}
+    local T={RPM=false,RPMValue=900,NoSpread=false,NoRecoil=false}
+    local A: {[string]: any}={Headshot=false,Reach=false,Omni=false,Distance=8,Aura=false,Targets={Zombies=true,NPCs=true},keyState={},nextSwing=0}
+    Combat.Extensions=X;Combat.Vehicle=V;Combat.Turret=T;Combat.Melee=A
+    Gun.InstantBullet=false;Gun.BulletMultiplier=1;Gun.RPM=false;Gun.RPMValue=900
+    Gun.NoCameraShake=false;Gun.SightZoom=false;Gun.Zoom=2;Gun.NoEquipDelay=false;Gun.Debug=false
+    local function actor()
+        local s=Combat.Service();return s and s.Replicator and s.Replicator.LocalActor
+    end
+    local function localWeapon(w) return w and w._actor==actor() end
+    local function field(object,key,on,value)
+        if type(object)~="table" then return end
+        local saved=X.saved[object]
+        if on then
+            if not saved then saved={};X.saved[object]=saved end
+            local old=saved[key]
+            if not old then old={value=rawget(object,key)};saved[key]=old end
+            object[key]=value;old.applied=value
+        elseif saved and saved[key] then
+            local old=saved[key]
+            if rawget(object,key)==old.applied then object[key]=old.value end
+            saved[key]=nil
+            if next(saved)==nil then X.saved[object]=nil end
+        end
+    end
+    local function restore(object)
+        local saved=X.saved[object]
+        if saved then
+            for key,old in pairs(saved) do if rawget(object,key)==old.applied then object[key]=old.value end end
+            X.saved[object]=nil
+        end
+    end
+    local function toggle(section,text,state,key,flag)
+        section:AddToggle({Text=text,Flag=flag,Default=false,Callback=function(v) state[key]=v end})
+    end
+    local function slider(section,text,state,key,flag,min,max,default,step,suffix)
+        section:AddSlider({Text=text,Flag=flag,Min=min,Max=max,Default=default,Rounding=step,Suffix=suffix or "",
+            Callback=function(v) state[key]=math.clamp(v,min,max) end})
+    end
+    toggle(GunBallistics,"Instant Bullet",Gun,"InstantBullet","gun_instant_bullet")
+    slider(GunBallistics,"Bullet Speed",Gun,"BulletMultiplier","gun_bullet_multiplier",1,10,1,.1,"x")
+    GunBallistics:AddLabel({Text="O servidor pode não validar velocidade ou impactos modificados."})
+    toggle(GunHandling,"RPM Modifier",Gun,"RPM","gun_rpm_enabled")
+    slider(GunHandling,"RPM",Gun,"RPMValue","gun_rpm_value",60,3000,900,10," RPM")
+    toggle(GunHandling,"No Equip Delay",Gun,"NoEquipDelay","gun_no_equip_delay")
+    toggle(GunHandling,"No Camera Shake",Gun,"NoCameraShake","gun_no_camera_shake")
+    toggle(GunHandling,"Sight Zoom",Gun,"SightZoom","gun_sight_zoom")
+    slider(GunHandling,"Sight Magnification",Gun,"Zoom","gun_sight_magnification",1,10,2,.1,"x")
+    toggle(GunVisualSection,"Gun Debug HUD",Gun,"Debug","gun_debug_hud")
+    local mp=MainWindow:AddTab({Text="Melee Aura (wip)",Pages={"Settings"}})
+    local ml=mp:AddSection({Title="Melee",Side="Left"})
+    local mr=mp:AddSection({Title="Kill Aura",Side="Right"})
+    toggle(ml,"Melee Force Headshot",A,"Headshot","melee_force_headshot")
+    toggle(ml,"Extended Reach",A,"Reach","melee_extended_reach")
+    slider(ml,"Reach Distance",A,"Distance","melee_reach_distance",1,20,8,.5," studs")
+    toggle(ml,"360° Reach Assist",A,"Omni","melee_omni_reach")
+    ml:AddLabel({Text="Com Extended Reach: cada golpe busca um alvo ou objeto visível no raio selecionado."})
+    toggle(mr,"Kill Aura",A,"Aura","melee_kill_aura")
+    A.key=mr:AddKeyPicker({Text="Kill Aura Key",Flag="melee_aura_key",Default=Enum.KeyCode.K,Mode="Toggle",Callback=function() end})
+    mr:AddDropdown({Text="Targets",Flag="melee_aura_targets",Options={"Zombie","NPC","Player"},Default={"Zombie","NPC"},Multi=true,
+        Callback=function(values)
+            local selected={};local map={Zombie="Zombies",NPC="NPCs",Player="Players"}
+            if type(values)=="string" then values={values} end
+            for k,v in pairs(values or {}) do local name=type(k)=="number" and v or (v and k);if map[name] then selected[map[name]]=true end end
+            A.Targets=selected
+        end})
+    mr:AddLabel({Text="Requer arma melee equipada. Respeita paredes e aliados."})
+    local vp=MainWindow:AddTab({Text="Vehicle Mods",Pages={"Settings"}})
+    local vl=vp:AddSection({Title="Driving",Side="Left"});local vr=vp:AddSection({Title="Flight",Side="Right"})
+    toggle(vl,"Speed Mod",V,"Speed","vehicle_speed")
+    slider(vl,"Speed",V,"SpeedValue","vehicle_speed_value",1,250,80,1," studs/s")
+    toggle(vl,"Stability Assist (Cars)",V,"Stability","vehicle_stability")
+    toggle(vl,"Heli Fast Startup",V,"FastStart","vehicle_heli_start")
+    toggle(vr,"Vehicle Fly",V,"Fly","vehicle_fly")
+    V.key=vr:AddKeyPicker({Text="Vehicle Fly Key",Flag="vehicle_fly_key",Default=Enum.KeyCode.V,Mode="Toggle",Callback=function() end})
+    slider(vr,"Fly Speed",V,"FlySpeed","vehicle_fly_speed",1,250,60,1," studs/s")
+    toggle(vr,"Vehicle Noclip",V,"Noclip","vehicle_noclip")
+    vr:AddLabel({Text="Local simulation; server corrections may still occur."})
+    local tp=MainWindow:AddTab({Text="Turret Mods",Pages={"Settings"}})
+    local ts=tp:AddSection({Title="Turret",Side="Left"})
+    toggle(ts,"Turret RPM Changer",T,"RPM","turret_rpm_enabled")
+    slider(ts,"Turret RPM",T,"RPMValue","turret_rpm_value",60,3000,900,10," RPM")
+    toggle(ts,"No Spread",T,"NoSpread","turret_no_spread")
+    toggle(ts,"No Recoil",T,"NoRecoil","turret_no_recoil")
+    local function applyGun(w)
+        if not localWeapon(w) or not w._firearm then return end
+        local tune=w._firearm.Tune
+        Gun.ApplyField(tune,"Barrel_Spread",Gun.NoSpread,function(base) return (base or 1)*(1-Gun.SpreadReduction/100) end)
+        Gun.ApplyField(tune,"RPM",Gun.RPM,function() return Gun.RPMValue end)
+        Gun.ApplyField(tune,"Equip_Delay",Gun.NoEquipDelay,function() return 0 end)
+    end
+    local function applyTurret(ctrl)
+        if not ctrl or type(ctrl._config)~="table" then return end
+        if X.turret and X.turret~=ctrl then restore(X.turret._config) end
+        X.turret=ctrl
+        local c=ctrl._config
+        field(c,"RPM",T.RPM,T.RPMValue);field(c,"Barrel_Spread",T.NoSpread,0)
+        field(c,"Recoil_Base",T.NoRecoil,Vector2.zero);field(c,"Recoil_Range",T.NoRecoil,Vector2.zero)
+    end
+    local installers={}
+    installers.FirearmInventory=function(c)
+        Gun.firearmClass=c
+        Gun.Hook(c,"Discharge",function(original) return function(w,...)
+            if not localWeapon(w) then return original(w,...) end
+            applyGun(w)
+            local thread=coroutine.running();local previous=X.shots[thread];X.shots[thread]=true
+            local r=table.pack(pcall(original,w,...));X.shots[thread]=previous
+            if not r[1] then error(r[2],0) end
+            return table.unpack(r,2,r.n)
+        end end)
+        Gun.Hook(c,"Equip",function(original) return function(w,...)
+            applyGun(w);return original(w,...)
+        end end)
+    end
+    installers.BulletService=function(c)
+        Gun.Hook(c,"GetInfo",function(original) return function(self,...)
+            local r=table.pack(original(self,...))
+            if Gun.active and Gun.InstantBullet and X.shots[coroutine.running()] and type(r[1])=="number" then r[1]=r[1]*Gun.BulletMultiplier end
+            return table.unpack(r,1,r.n)
+        end end)
+    end
+    installers.CharacterCamera=function(c)
+        Gun.Hook(c,"Shake",function(original) return function(camera,preset,...)
+            if X.active and T.NoRecoil and X.turretShot then return preset end
+            return original(camera,preset,...)
+        end end)
+        Gun.Hook(c,"Render",function(original) return function(camera,...)
+            local suppress=Gun.active and Gun.NoCameraShake
+            local influences={}
+            if suppress then
+                for _,shake in ipairs(camera._shakes or {}) do
+                    influences[#influences+1]={shake,shake.PositionInfluence,shake.RotationInfluence}
+                    shake.PositionInfluence=Vector3.zero;shake.RotationInfluence=Vector3.zero
+                end
+            end
+            local r=table.pack(pcall(original,camera,...))
+            for _,v in ipairs(influences) do v[1].PositionInfluence=v[2];v[1].RotationInfluence=v[3] end
+            if not r[1] then error(r[2],0) end
+            local me=actor();local cam=workspace.CurrentCamera
+            if Gun.active and Gun.SightZoom and me and me.ADS and cam then
+                cam.FieldOfView=math.clamp(math.deg(2*math.atan(math.tan(math.rad(cam.FieldOfView)/2)/Gun.Zoom)),5,100)
+            end
+            return table.unpack(r,2,r.n)
+        end end)
+    end
+    installers.TurretController=function(c)
+        for _,key in ipairs({"Update","_discharge","Discharge"}) do
+            Gun.Hook(c,key,function(original) return function(ctrl,...)
+                applyTurret(ctrl)
+                if key~="Discharge" then return original(ctrl,...) end
+                local previous=X.turretShot;X.turretShot=true
+                local r=table.pack(pcall(original,ctrl,...));X.turretShot=previous
+                if not r[1] then error(r[2],0) end
+                return table.unpack(r,2,r.n)
+            end end)
+        end
+        Gun.Hook(c,"Destroy",function(original) return function(ctrl,...)
+            restore(ctrl._config);if X.turret==ctrl then X.turret=nil end
+            return original(ctrl,...)
+        end end)
+    end
+    installers.MeleeInventory=function(c) A.class=c end
+    function A.PickReachDirection(self,origin,range)
+        local params=RaycastParams.new();params.FilterType=Enum.RaycastFilterType.Exclude
+        local exclude={self._actor.Character}
+        if workspace.CurrentCamera then exclude[#exclude+1]=workspace.CurrentCamera end
+        params.FilterDescendantsInstances=exclude
+        local candidates={};local known={}
+        local function add(part,point,priority)
+            if not part or known[part] or typeof(point)~="Vector3" then return end
+            local delta=point-origin;local distance=delta.Magnitude
+            if distance<.05 or distance>range then return end
+            known[part]=true;candidates[#candidates+1]={part=part,delta=delta,distance=distance,priority=priority}
+        end
+        for _,target in ipairs(Combat.actors) do
+            local kind=Combat.Kind(target)
+            local friendly=kind=="Players" and target.Owner and target.Owner.Team~=nil and target.Owner.Team==AimLocalPlayer.Team
+            if not friendly and Combat.IsAlive(target) then
+                local part=target.Parts and target.Parts.Head
+                if part and part.Parent then add(part,part.Position,0) end
+            end
+        end
+        local overlap=OverlapParams.new();overlap.FilterType=Enum.RaycastFilterType.Exclude;overlap.FilterDescendantsInstances=exclude
+        for _,part in ipairs(workspace:GetPartBoundsInRadius(origin,range,overlap)) do
+            if part.CanQuery and part.Transparency<1 then
+                local uid,bodyActor=self.Replicator:GetFromBodyPart(part)
+                if not uid and not bodyActor then
+                    local half=part.Size*.5;local localPoint=part.CFrame:PointToObjectSpace(origin)
+                    local nearest=part.CFrame:PointToWorldSpace(Vector3.new(math.clamp(localPoint.X,-half.X,half.X),math.clamp(localPoint.Y,-half.Y,half.Y),math.clamp(localPoint.Z,-half.Z,half.Z)))
+                    -- Ignore the supporting floor; aim slightly inside the nearest surface.
+                    if nearest.Y>=origin.Y-1.5 then
+                        local towardCenter=part.Position-nearest
+                        local inside=nearest+(towardCenter.Magnitude>.001 and towardCenter.Unit*math.min(.05,towardCenter.Magnitude) or Vector3.zero)
+                        add(part,inside,1)
+                    end
+                end
+            end
+        end
+        table.sort(candidates,function(a,b) if a.priority~=b.priority then return a.priority<b.priority end;return a.distance<b.distance end)
+        for _,candidate in ipairs(candidates) do
+            local hit=workspace:Raycast(origin,candidate.delta,params)
+            if hit and hit.Instance==candidate.part then return candidate.delta end
+            if hit then
+                local _,wanted=self.Replicator:GetFromBodyPart(candidate.part)
+                if wanted and wanted.Character and hit.Instance:IsDescendantOf(wanted.Character) then return candidate.delta end
+            end
+        end
+        return nil
+    end
+    installers.MeleeInventoryReplicator=function(c)
+        Gun.Hook(c,"Impact",function(original) return function(self,direction,...)
+            if self._actor==actor() and A.auraActive and A.target and A.target.Parent then
+                local origin=self._actor.CFrame:PointToWorldSpace(Vector3.new(0,2.5,0))
+                direction=A.target.Position-origin
+                local me=actor();local weapon=me and me._inventory and me._inventory[me._equipped]
+                local range=A.Reach and A.Distance or (weapon and weapon._distance or 0)
+                if direction.Magnitude>range then return end
+            elseif self._actor==actor() and A.Reach and A.Omni then
+                local origin=self._actor.CFrame:PointToWorldSpace(Vector3.new(0,2.5,0))
+                direction=A.PickReachDirection(self,origin,A.Distance) or direction
+            end
+            if self._actor==actor() and A.Reach and typeof(direction)=="Vector3" and direction.Magnitude>A.Distance then direction=direction.Unit*A.Distance end
+            local r=table.pack(original(self,direction,...))
+            if self._actor==actor() and A.Headshot and r[2] then r[3]="Head" end
+            return table.unpack(r,1,r.n)
+        end end)
+    end
+    local function direction()
+        local cam=workspace.CurrentCamera
+        if not cam or AimUIS:GetFocusedTextBox() then return Vector3.zero end
+        local function down(k) return AimUIS:IsKeyDown(k) and 1 or 0 end
+        local d=cam.CFrame.LookVector*(down(Enum.KeyCode.W)-down(Enum.KeyCode.S))+cam.CFrame.RightVector*(down(Enum.KeyCode.D)-down(Enum.KeyCode.A))
+            +Vector3.yAxis*(down(Enum.KeyCode.Space)-down(Enum.KeyCode.LeftControl))
+        return d.Magnitude>1 and d.Unit or d
+    end
+    installers.VehicleSolver=function(c)
+        Gun.Hook(c,"_integrate",function(original) return function(solver,state,dt)
+            if X.active and V.flyActive and solver._vehicle and solver._vehicle.Controlling then
+                local physics=solver._solver
+                solver._state=state;solver:_applyState()
+                physics:SetState(nil,direction()*V.FlySpeed,Vector3.zero)
+                physics.Force=Vector3.zero;physics.Torque=Vector3.zero
+                physics:Step(dt)
+                return solver:_getState()
+            end
+            return original(solver,state,dt)
+        end end)
+        Gun.Hook(c,"Update",function(original) return function(solver,dt,inputs,...)
+            local vehicle=solver._vehicle
+            if not X.active or not vehicle or not vehicle.Controlling then return original(solver,dt,inputs,...) end
+            local physics=solver._solver;local state=physics and physics.State
+            if not state then return original(solver,dt,inputs,...) end
+            local heli=vehicle.Rotors~=nil
+            if heli and V.FastStart then
+                for _,engine in pairs(solver.Engines or {}) do if engine:GetOn() and not engine:GetFullyOn() then engine:TimeSkip(120) end end
+            end
+            local cf=state.CFrame*physics.CenterOfMass:Inverse()
+            local velocity=state.Velocity;local angular=state.AngularVelocity
+            if V.flyActive then
+                velocity=direction()*V.FlySpeed;angular=Vector3.zero
+                physics:SetState(cf,velocity,angular)
+            elseif V.Speed and inputs and math.abs(inputs.Throttle or 0)>.01 then
+                local forward=cf.LookVector
+                if not heli then forward=Vector3.new(forward.X,0,forward.Z) end
+                if forward.Magnitude>.01 then
+                    local desired=forward.Unit*V.SpeedValue*math.clamp(inputs.Throttle,-1,1)
+                    if not heli then desired+=Vector3.yAxis*velocity.Y end
+                    velocity=velocity:Lerp(desired,1-math.exp(-math.clamp(dt,0,.1)*4))
+                    physics:SetState(nil,velocity,nil)
+                end
+            end
+            if V.Stability and not heli and not V.flyActive then
+                local localAV=cf:VectorToObjectSpace(angular)
+                local decay=math.exp(-math.clamp(dt,0,.1)*8)
+                local correction=cf.UpVector:Cross(Vector3.yAxis)*math.clamp(dt*4,0,.4)
+                physics:SetState(nil,velocity,cf:VectorToWorldSpace(Vector3.new(localAV.X*decay,localAV.Y,localAV.Z*decay))+correction)
+            end
+            local old=physics.CollisionCastParams
+            if V.Noclip then
+                if not X.emptyCast then X.emptyCast=RaycastParams.new();X.emptyCast.FilterType=Enum.RaycastFilterType.Include;X.emptyCast.FilterDescendantsInstances={} end
+                physics.CollisionCastParams=X.emptyCast
+            end
+            local r=table.pack(pcall(original,solver,dt,inputs,...));physics.CollisionCastParams=old
+            if not r[1] then error(r[2],0) end
+            return table.unpack(r,2,r.n)
+        end end)
+    end
+    local baseUpdate=Gun.UpdateTune
+    Gun.UpdateTune=function() baseUpdate();local me=actor();applyGun(me and me._inventory and me._inventory[me._equipped]) end
+    local R: {[string]: any}={Enabled=false,rows={},byId={},limit=150,connections={},active=true,count=0}
+    Combat.Radio=R
+    local radioSection=SharedPage:AddSection({Title="Radio Logger",Side="Right"})
+    local function radioConnect(signal,fn)
+        local connection=signal:Connect(fn);R.connections[#R.connections+1]=connection;return connection
+    end
+    function R.Clear()
+        for _,row in ipairs(R.rows) do if row.label then row.label:Destroy() end end
+        R.rows={};R.byId={};R.count=0
+        if R.status then R.status.Text="Mensagens de rádio recebidas • 0 / 150" end
+    end
+    function R.Build()
+        if R.gui then return end
+        local gui=Instance.new("ScreenGui");gui.Name="LeanRadioLogger";gui.ResetOnSpawn=false;gui.DisplayOrder=30
+        gui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling;gui.Parent=AimLocalPlayer:WaitForChild("PlayerGui")
+        local frame=Instance.new("Frame");frame.Name="RadioChat";frame.AnchorPoint=Vector2.new(1,0)
+        frame.Position=UDim2.new(1,-18,0,88);frame.Size=UDim2.new(.34,0,.32,0)
+        frame.BackgroundColor3=Color3.fromRGB(15,17,21);frame.BackgroundTransparency=.08;frame.BorderSizePixel=0;frame.Parent=gui
+        local bounds=Instance.new("UISizeConstraint");bounds.MinSize=Vector2.new(260,160);bounds.MaxSize=Vector2.new(520,340);bounds.Parent=frame
+        local corner=Instance.new("UICorner");corner.CornerRadius=UDim.new(0,8);corner.Parent=frame
+        local header=Instance.new("TextLabel");header.Name="Header";header.Size=UDim2.new(1,-80,0,34);header.Position=UDim2.fromOffset(12,0)
+        header.BackgroundTransparency=1;header.Text="RADIO LOGGER";header.TextColor3=Color3.fromRGB(225,230,238)
+        header.Font=Enum.Font.GothamBold;header.TextSize=13;header.TextXAlignment=Enum.TextXAlignment.Left;header.Active=true;header.Parent=frame
+        local clear=Instance.new("TextButton");clear.Name="Clear";clear.Size=UDim2.fromOffset(60,26);clear.Position=UDim2.new(1,-68,0,4)
+        clear.BackgroundColor3=Color3.fromRGB(37,42,51);clear.BorderSizePixel=0;clear.Text="Limpar";clear.TextColor3=Color3.new(1,1,1);clear.Font=Enum.Font.Gotham;clear.TextSize=12;clear.Parent=frame
+        local status=Instance.new("TextLabel");status.Size=UDim2.new(1,-24,0,20);status.Position=UDim2.fromOffset(12,32)
+        status.BackgroundTransparency=1;status.Text="Mensagens de rádio recebidas • 0 / 150";status.TextColor3=Color3.fromRGB(150,160,177)
+        status.Font=Enum.Font.Gotham;status.TextSize=11;status.TextXAlignment=Enum.TextXAlignment.Left;status.Parent=frame
+        local scroll=Instance.new("ScrollingFrame");scroll.Name="Messages";scroll.Position=UDim2.fromOffset(10,58);scroll.Size=UDim2.new(1,-20,1,-68)
+        scroll.BackgroundTransparency=1;scroll.BorderSizePixel=0;scroll.ScrollBarThickness=4;scroll.ScrollBarImageColor3=Color3.fromRGB(111,139,175)
+        scroll.CanvasSize=UDim2.new();scroll.AutomaticCanvasSize=Enum.AutomaticSize.Y;scroll.Parent=frame
+        local layout=Instance.new("UIListLayout");layout.Padding=UDim.new(0,6);layout.SortOrder=Enum.SortOrder.LayoutOrder;layout.Parent=scroll
+        R.gui=gui;R.frame=frame;R.scroll=scroll;R.status=status;gui.Enabled=R.Enabled
+        radioConnect(clear.MouseButton1Click,R.Clear)
+        local dragging,startMouse,startPosition
+        radioConnect(header.InputBegan,function(input)
+            if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
+                dragging=input;startMouse=input.Position;startPosition=frame.Position
+            end
+        end)
+        radioConnect(AimUIS.InputChanged,function(input)
+            if not dragging or not R.Enabled then return end
+            if input.UserInputType==Enum.UserInputType.MouseMovement or input==dragging then
+                local delta=input.Position-startMouse
+                local viewport=workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920,1080)
+                local x=viewport.X*startPosition.X.Scale+startPosition.X.Offset+delta.X
+                local y=viewport.Y*startPosition.Y.Scale+startPosition.Y.Offset+delta.Y
+                frame.Position=UDim2.fromOffset(math.clamp(x,frame.AbsoluteSize.X,math.max(frame.AbsoluteSize.X,viewport.X)),math.clamp(y,0,math.max(0,viewport.Y-frame.AbsoluteSize.Y)))
+            end
+        end)
+        radioConnect(AimUIS.InputEnded,function(input)
+            if dragging and (input==dragging or input.UserInputType==Enum.UserInputType.MouseButton1) then dragging=nil end
+        end)
+    end
+    function R.Add(id,channel,name,message)
+        if not R.active or not R.Enabled then return end
+        R.Build()
+        local row=R.byId[id]
+        local follow=R.scroll.CanvasPosition.Y+R.scroll.AbsoluteSize.Y>=R.scroll.AbsoluteCanvasSize.Y-40
+        if not row then
+            R.count+=1
+            local label=Instance.new("TextLabel");label.Size=UDim2.new(1,-8,0,0);label.AutomaticSize=Enum.AutomaticSize.Y
+            label.BackgroundTransparency=1;label.TextColor3=Color3.fromRGB(216,223,234);label.Font=Enum.Font.Code;label.TextSize=13
+            label.TextWrapped=true;label.RichText=false;label.TextXAlignment=Enum.TextXAlignment.Left;label.TextYAlignment=Enum.TextYAlignment.Top
+            label.LayoutOrder=R.count;label.Parent=R.scroll
+            row={id=id,label=label};R.byId[id]=row;R.rows[#R.rows+1]=row
+            if #R.rows>R.limit then local oldest=table.remove(R.rows,1);R.byId[oldest.id]=nil;oldest.label:Destroy() end
+        end
+        row.label.Text="["..tostring(channel).."] "..tostring(name)..": "..tostring(message)
+        R.status.Text="Mensagens de rádio recebidas • "..#R.rows.." / 150"
+        if follow then task.defer(function()
+            if R.active and R.scroll and R.scroll.Parent then R.scroll.CanvasPosition=Vector2.new(0,math.max(0,R.scroll.AbsoluteCanvasSize.Y-R.scroll.AbsoluteSize.Y)) end
+        end) end
+    end
+    function R.Process(message)
+        if not R.Enabled or not R.active or not message.TextSource then return end
+        if message.Status and message.Status~=Enum.TextChatMessageStatus.Success then return end
+        local ok,metadata=pcall(game:GetService("HttpService").JSONDecode,game:GetService("HttpService"),message.Metadata)
+        if not ok or type(metadata)~="table" or not metadata.Radio then return end
+        local source=AimPlayers:GetPlayerByUserId(message.TextSource.UserId)
+        local name=source and (source.DisplayName.." (@"..source.Name..")") or tostring(message.TextSource.UserId)
+        local channel=type(metadata.Channel)=="string" and metadata.Channel or "000"
+        R.Add(message.MessageId,channel,name,message.Text)
+    end
+    local chat=game:GetService("TextChatService")
+    local function attachMain(channel)
+        if channel.Name~="Main" or not channel:IsA("TextChannel") or R.main==channel then return end
+        if R.messageConnection then R.messageConnection:Disconnect() end
+        R.main=channel;R.messageConnection=radioConnect(channel.MessageReceived,function(message)
+            local ok,err=pcall(R.Process,message);if not ok then R.error=tostring(err) end
+        end)
+    end
+    local main=chat:FindFirstChild("Main");if main then attachMain(main) end
+    radioConnect(chat.ChildAdded,attachMain)
+    radioSection:AddToggle({Text="Radio Logger",Flag="visual_radio_logger",Default=false,Callback=function(enabled)
+        R.Enabled=enabled;if enabled then R.Build() end;if R.gui then R.gui.Enabled=enabled end
+    end})
+    radioSection:AddLabel({Text="[Canal] Jogador: mensagem. Apenas textos entregues ao cliente; sem transcrição de voz."})
+    local destroyBeforeRadio=Combat.Destroy
+    Combat.Destroy=function()
+        R.active=false
+        for _,connection in ipairs(R.connections) do connection:Disconnect() end
+        if R.gui then R.gui:Destroy() end
+        destroyBeforeRadio()
+    end
+    function X.Frame()
+        if os.clock()>=X.nextScan then
+            X.nextScan=os.clock()+3
+            for _,module in ipairs(getloadedmodules()) do
+                local install=installers[module.Name]
+                if install and not X.classes[module.Name] then
+                    local ok,c=pcall(require,module)
+                    if ok and type(c)=="table" then install(c);X.classes[module.Name]=c end
+                end
+            end
+        end
+        V.flyActive=V.Fly and Combat.KeyActive(V.key,V.keyState)
+        A.auraActive=A.Aura and Combat.KeyActive(A.key,A.keyState)
+        local me=actor();local w=me and me._inventory and me._inventory[me._equipped]
+        if X.meleeWeapon~=w then if X.meleeWeapon then restore(X.meleeWeapon);if X.autoSwing then X.meleeWeapon._swinging=false end end;X.meleeWeapon=w;X.autoSwing=false end
+        if w and not w._firearm and type(w._distance)=="number" then
+            field(w,"_distance",A.Reach,A.Distance)
+            A.target=nil
+            if A.auraActive and A.class and not me.Locked and not me.Sprinting then
+                local origin=me.CFrame:PointToWorldSpace(Vector3.new(0,2.5,0));local nearest=A.Reach and A.Distance or w._distance
+                for _,a in ipairs(Combat.actors) do
+                    local kind=Combat.Kind(a);local head=a.Parts and a.Parts.Head
+                    local friendly=kind=="Players" and a.Owner and a.Owner.Team~=nil and a.Owner.Team==AimLocalPlayer.Team
+                    if a~=me and A.Targets[kind] and not friendly and Combat.IsAlive(a) and head and head.Parent then
+                        local delta=head.Position-origin
+                        if delta.Magnitude<nearest then
+                            local params=RaycastParams.new();params.FilterType=Enum.RaycastFilterType.Exclude;params.FilterDescendantsInstances={me.Character}
+                            local hit=workspace:Raycast(origin,delta,params)
+                            if not hit or hit.Instance:IsDescendantOf(a.Character) then nearest=delta.Magnitude;A.target=head end
+                        end
+                    end
+                end
+            end
+            if A.target and not w._looping and os.clock()>=A.nextSwing then
+                A.nextSwing=os.clock()+math.max(w._timer or .5,.1);X.autoSwing=true
+                task.spawn(function() local ok,err=pcall(A.class._use,w,true);if not ok then X.error=tostring(err) end end)
+            elseif not A.target and X.autoSwing then w._swinging=false;X.autoSwing=false end
+        else A.target=nil end
+        if Gun.Debug then
+            if not X.hud then
+                local gui=Instance.new("ScreenGui");gui.Name="LeanGunDebug";gui.ResetOnSpawn=false;gui.Parent=AimLocalPlayer:WaitForChild("PlayerGui")
+                local label=Instance.new("TextLabel");label.Size=UDim2.fromOffset(340,112);label.Position=UDim2.new(0,16,1,-140)
+                label.BackgroundColor3=Color3.fromRGB(15,15,15);label.BackgroundTransparency=.2;label.TextColor3=Color3.new(1,1,1)
+                label.TextSize=14;label.Font=Enum.Font.Code;label.TextXAlignment=Enum.TextXAlignment.Left;label.Parent=gui
+                X.hud=gui;X.label=label
+            end
+            X.hud.Enabled=true
+            local tune=w and w._firearm and w._firearm.Tune
+            X.label.Text=string.format(" Gun: %s\n RPM: %s | Spread: %s\n Ammo: %s | Reloading: %s\n Bullet: %.1fx | %s",tostring(w and w.Name or "none"),tostring(tune and tune.RPM or "-"),tostring(tune and tune.Barrel_Spread or "-"),tostring(w and w._mag and w._mag.Capacity or "-"),tostring(w and w._reloading or false),Gun.InstantBullet and Gun.BulletMultiplier or 1,tostring(Gun.reloadError or X.error or "ready"))
+        elseif X.hud then X.hud.Enabled=false end
+    end
+    local oldDestroy=Combat.Destroy
+    Combat.Destroy=function()
+        X.active=false
+        if X.autoSwing and X.meleeWeapon then X.meleeWeapon._swinging=false end
+        for object in pairs(X.saved) do restore(object) end
+        if X.hud then X.hud:Destroy() end
+        oldDestroy()
+    end
+    table.insert(Combat.connections,AimRunService.RenderStepped:Connect(function()
+        if X.active then local ok,err=pcall(X.Frame);if not ok then X.error=tostring(err) end end
+    end))
+end
+
 table.insert(Combat.connections,AimRunService.RenderStepped:Connect(function()
     if Gun.active then Gun.Resolve();Gun.UpdateTune();Gun.UpdateVisuals() end
 end))
@@ -1414,7 +1906,7 @@ Combat.Install()
 print("LEAN_COMBAT_READY",Combat.hookState)
 -- Separate NPC/player renderers. Targets come exclusively from the game Actor registry.
 local Sense = (function()
-    local E = {
+    local E: {[string]: any} = {
         _hasLoaded = false, objects = {}, errors = {}, scanAt = 0,
         sharedSettings = {textSize=13, textFont=2, limitDistance=false, maxDistance=1000,
             teamBasedColor=false, neutralColor=Color3.fromRGB(100,220,150)},
