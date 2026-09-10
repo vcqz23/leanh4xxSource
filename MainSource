@@ -1752,7 +1752,7 @@ do
         local clear=Instance.new("TextButton");clear.Name="Clear";clear.Size=UDim2.fromOffset(60,26);clear.Position=UDim2.new(1,-68,0,4)
         clear.BackgroundColor3=Color3.fromRGB(37,42,51);clear.BorderSizePixel=0;clear.Text="Limpar";clear.TextColor3=Color3.new(1,1,1);clear.Font=Enum.Font.Gotham;clear.TextSize=12;clear.Parent=frame
         local status=Instance.new("TextLabel");status.Size=UDim2.new(1,-24,0,20);status.Position=UDim2.fromOffset(12,32)
-        status.BackgroundTransparency=1;status.Text="Mensagens de rádio recebidas • 0 / 150";status.TextColor3=Color3.fromRGB(150,160,177)
+        status.BackgroundTransparency=1;status.Text="Received • 0 / 150";status.TextColor3=Color3.fromRGB(150,160,177)
         status.Font=Enum.Font.Gotham;status.TextSize=11;status.TextXAlignment=Enum.TextXAlignment.Left;status.Parent=frame
         local scroll=Instance.new("ScrollingFrame");scroll.Name="Messages";scroll.Position=UDim2.fromOffset(10,58);scroll.Size=UDim2.new(1,-20,1,-68)
         scroll.BackgroundTransparency=1;scroll.BorderSizePixel=0;scroll.ScrollBarThickness=4;scroll.ScrollBarImageColor3=Color3.fromRGB(111,139,175)
