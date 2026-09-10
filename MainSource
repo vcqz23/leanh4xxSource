@@ -1480,7 +1480,7 @@ do
     end
     toggle(GunBallistics,"Instant Bullet",Gun,"InstantBullet","gun_instant_bullet")
     slider(GunBallistics,"Bullet Speed",Gun,"BulletMultiplier","gun_bullet_multiplier",1,10,1,.1,"x")
-    GunBallistics:AddLabel({Text="O servidor pode não validar velocidade ou impactos modificados."})
+    GunBallistics:AddLabel({Text="Your bullet will be invalidated sometimes"})
     toggle(GunHandling,"RPM Modifier",Gun,"RPM","gun_rpm_enabled")
     slider(GunHandling,"RPM",Gun,"RPMValue","gun_rpm_value",60,3000,900,10," RPM")
     toggle(GunHandling,"No Equip Delay",Gun,"NoEquipDelay","gun_no_equip_delay")
