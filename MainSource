@@ -1,4 +1,4 @@
-if getgenv().LeanCombat then pcall(getgenv().LeanCombat.Destroy) end
+=if getgenv().LeanCombat then pcall(getgenv().LeanCombat.Destroy) end
 if getgenv().LeanNPCESP then pcall(getgenv().LeanNPCESP.Unload) end
 if getgenv().CodexNPCESP then pcall(getgenv().CodexNPCESP.Destroy) end
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/vcqz23/settings/refs/heads/main/V2"))()
@@ -27,7 +27,19 @@ do
             data=table.clone(data)
             data.Default=Enum.KeyCode.RightShift
         end
-        return addKeyPicker(self,data)
+        local control=addKeyPicker(self,data)
+        local set=control.Set
+        control.Set=function(value)
+            if type(value)=="table" then
+                value=table.clone(value)
+                value.Mode=value.Mode or control.Mode
+                if value.Active==nil then value.Active=value.active end
+                set(value)
+                if value.Active~=nil and control.Mode=="Toggle" then set(value.Active==true) end
+            else set(value) end
+        end
+        Library.ConfigFlags[control.Flag]=control.Set
+        return control
     end
     local addDropdown = Library.AddDropdown
     Library.AddDropdown = function(self,data)
@@ -40,7 +52,7 @@ end
 -- Create window
 local MainWindow = Library:CreateWindow({
     Title = "Lean",
-    SubText = "V1.9 | BRM5",
+    SubText = "V2 | BRM5",
     IsMobile = false,
 
     -- "wave" | "rainbow" | "pulse" | "gradient"
@@ -114,6 +126,45 @@ function Combat.Service()
     end
     return Combat.service
 end
+function Combat.Inventory()
+    if Combat.inventoryService then return Combat.inventoryService end
+    if os.clock()<(Combat.inventoryRetry or 0) then return nil end
+    Combat.inventoryRetry=os.clock()+1
+    for _,module in ipairs(getloadedmodules()) do
+        if module.Name=="InventoryService" then
+            local ok,value=pcall(require,module)
+            if ok and type(value)=="table" and type(value._inventories)=="table" then Combat.inventoryService=value;return value end
+        end
+    end
+end
+function Combat.Weapon()
+    local inventory=Combat.Inventory()
+    local entry=inventory and inventory.Equipped
+    return entry and entry.Handler
+end
+function Combat.Weapons()
+    local inventory=Combat.Inventory();local weapons={};local seen={}
+    for _,group in pairs(inventory and inventory._inventories or {}) do
+        for _,entry in pairs(group) do
+            local w=entry.Handler
+            if w and w._firearm and not seen[w] then seen[w]=true;weapons[#weapons+1]=w end
+        end
+    end
+    return weapons
+end
+function Combat.IsTeammate(a)
+    local owner=a and a.Owner
+    if not owner then return false end
+    if owner==AimLocalPlayer then return true end
+    local service=Combat.Service()
+    local clients=service and service.Clients
+    local mine=clients and clients[AimLocalPlayer] or (service and service.LocalClient)
+    local other=clients and clients[owner]
+    if mine and other and mine.Squad~=nil and other.Squad~=nil and mine.Squad~="" and mine.Squad~="Neutral" then
+        return mine.Squad==other.Squad
+    end
+    return AimLocalPlayer.Team~=nil and not AimLocalPlayer.Neutral and not owner.Neutral and owner.Team==AimLocalPlayer.Team
+end
 function Combat.Kind(actor)
     local c=Combat.Service()
     local registry=c and c.Replicator and c.Replicator.Actors
@@ -135,7 +186,7 @@ function Combat.Allowed(actor,settings)
     if not kind or not settings.Targets[kind] then return false end
     if not Combat.IsAlive(actor) then return false end
     if not actor.Character or not actor.Character.Parent then return false end
-    if settings.TeamCheck and kind=="Players" and AimLocalPlayer.Team~=nil and actor.Owner.Team==AimLocalPlayer.Team then return false end
+    if settings.TeamCheck and kind=="Players" and Combat.IsTeammate(actor) then return false end
     return true
 end
 function Combat.Origin(camera)
@@ -351,7 +402,7 @@ function Combat.KeyActive(picker,state)
         if key.EnumType==Enum.UserInputType then down=AimUIS:IsMouseButtonPressed(key)
         elseif key.EnumType==Enum.KeyCode then down=AimUIS:IsKeyDown(key) end
     end
-    if picker.Mode=="Toggle" then if down and not state.down then state.on=not state.on end;state.down=down;return state.on==true end
+    if picker.Mode=="Toggle" then return picker.Active==true end
     state.down=down;return down
 end
 function Combat.TriggerStep(actor,now,fire)
@@ -1111,61 +1162,81 @@ function Gun.RestoreModes(weapon)
     end
     if tune then Gun.ApplyField(tune,"Firemodes",false) end
 end
-function Gun.UpdateTune()
-    local c=Combat.Service()
-    local actor=c and c.Replicator and c.Replicator.LocalActor
-    local weapon=actor and actor._inventory and actor._inventory[actor._equipped]
+function Gun.ApplyWeapon(weapon)
     local tune=weapon and weapon._firearm and weapon._firearm.Tune
-    if Gun.modeWeapon and (Gun.modeWeapon~=weapon or not Gun.UnlockModes) then
-        Gun.RestoreModes(Gun.modeWeapon);Gun.modeWeapon=nil
+    if type(tune)~="table" then return end
+    Gun.modeWeapons=Gun.modeWeapons or {}
+    if not Gun.UnlockModes and Gun.modeWeapons[weapon] then
+        Gun.RestoreModes(weapon);Gun.modeWeapons[weapon]=nil;weapon._fireMode=nil
     end
-    for old in pairs(Gun.originals) do
-        if old~=tune then
-            Gun.ApplyField(old,"Firemodes",false)
-            for key in pairs(Gun.originals[old]) do Gun.ApplyField(old,key,false) end
-            Gun.originals[old]=nil
+    Gun.ApplyField(tune,"Barrel_Spread",Gun.NoSpread,function(base) return (base or 1)*(1-Gun.SpreadReduction/100) end)
+    Gun.ApplyField(tune,"RPM",Gun.RPM==true,function() return math.clamp(Gun.RPMValue or 900,60,3000) end)
+    Gun.ApplyField(tune,"Equip_Delay",Gun.NoEquipDelay==true,function() return 0 end)
+    if type(tune.Firemodes)=="table" then
+        local before=tune.Firemodes
+        Gun.ApplyField(tune,"Firemodes",Gun.UnlockModes,function(base)
+            local fields=Gun.originals[tune]
+            local saved=fields and fields.Firemodes
+            if saved and saved.expanded and saved.base==base then return saved.expanded end
+            local modes=table.clone(base)
+            for _,mode in ipairs({1,2,3,0}) do if not table.find(modes,mode) then modes[#modes+1]=mode end end
+            if saved then saved.base=base;saved.expanded=modes end
+            return modes
+        end)
+        if Gun.UnlockModes then Gun.modeWeapons[weapon]=true end
+        if before~=tune.Firemodes then
+            weapon._fireMode=nil
+            if weapon.Equipped and type(weapon.UpdateHUD)=="function" then pcall(weapon.UpdateHUD,weapon) end
         end
     end
-    if type(tune)~="table" then return end
-    Gun.ApplyField(tune,"Barrel_Spread",Gun.NoSpread,function(base)
-        return (base or 1)*(1-Gun.SpreadReduction/100)
-    end)
-    if type(tune.Firemodes)=="table" then
-        Gun.ApplyField(tune,"Firemodes",Gun.UnlockModes,function(base)
-            if Gun.modeBase~=base then
-                Gun.modeBase=base;Gun.modeList=table.clone(base)
-                for _,mode in ipairs({0,1,2,3}) do
-                    if not table.find(Gun.modeList,mode) then table.insert(Gun.modeList,mode) end
-                end
-            end
-            return Gun.modeList
-        end)
-        if Gun.UnlockModes then Gun.modeWeapon=weapon end
-    end
+end
+function Gun.ReloadReady(weapon)
+    if not weapon or not weapon.Equipped or weapon._reloading or not weapon._firearm then return false end
     local meta=weapon._item and weapon._item.MetaData
-    if Gun.AutoReload and weapon.Equipped and not weapon._reloading and meta
-        and (not weapon._mag or (weapon._mag.Capacity or 0)<=0)
-        and (tune.NoChamber or not meta.Chamber) and os.clock()>=Gun.nextReload
-        and Gun.firearmClass and type(Gun.firearmClass._reload)=="function" and not Gun.reloadPending then
-        Gun.nextReload=os.clock()+1
-        Gun.reloadPending=true
+    if not meta then return false end
+    local ammo=weapon._mag and weapon._mag.Capacity or 0
+    return ammo<=0 and (weapon._firearm.Tune.NoChamber or not meta.Chamber)
+end
+function Gun.RequestReload(weapon)
+    if not Gun.ReloadReady(weapon) then return "Not ready" end
+    local mags=weapon:_getMags()
+    if type(mags)~="table" or not mags[1] then return "No compatible reserve ammunition" end
+    local reload=Gun.firearmClass and Gun.firearmClass._reload
+    if type(reload)~="function" then return "Reload adapter unavailable" end
+    weapon._cancelReload=false
+    reload(weapon,true)
+    return weapon._reloading and "Reloading" or "Waiting for game"
+end
+function Gun.UpdateTune()
+    local weapons=Combat.Weapons();local live={};local keep={}
+    for _,weapon in ipairs(weapons) do
+        keep[weapon]=true;live[weapon._firearm.Tune]=true
+        Gun.ApplyWeapon(weapon)
+    end
+    for weapon in pairs(Gun.modeWeapons or {}) do
+        if not keep[weapon] then Gun.RestoreModes(weapon);Gun.modeWeapons[weapon]=nil end
+    end
+    for tune,fields in pairs(Gun.originals) do
+        if not live[tune] then
+            for key,saved in pairs(fields) do if tune[key]==saved.applied then tune[key]=saved.value end end
+            Gun.originals[tune]=nil
+        end
+    end
+    local weapon=Combat.Weapon()
+    if Gun.AutoReload and Gun.ReloadReady(weapon) and os.clock()>=Gun.nextReload and not Gun.reloadPending
+        and Gun.firearmClass and type(Gun.firearmClass._reload)=="function" then
+        Gun.nextReload=os.clock()+.6;Gun.reloadPending=true
         task.defer(function()
-            if Gun.active and Gun.AutoReload and weapon.Equipped and not weapon._reloading then
-                local current=Combat.Service()
-                local a=current and current.Replicator and current.Replicator.LocalActor
-                if a and a._inventory and a._inventory[a._equipped]==weapon then
-                    local ok,mags=pcall(weapon._getMags,weapon)
-                    if ok and type(mags)=="table" and mags[1] then
-                        weapon._cancelReload=false
-                        local success,err=pcall(Gun.firearmClass._reload,weapon,true)
-                        Gun.reloadError=not success and tostring(err) or nil
-                    end
-                end
-            end
+            local ok,err=pcall(function()
+                if not Gun.active or not Gun.AutoReload or Combat.Weapon()~=weapon or not Gun.ReloadReady(weapon) then return end
+                Gun.reloadStatus=Gun.RequestReload(weapon)
+            end)
+            Gun.reloadError=not ok and tostring(err) or nil
             Gun.reloadPending=false
         end)
     end
 end
+
 function Gun.RestoreVisuals()
     for part,saved in pairs(Gun.visualParts) do
         if part.Parent then
@@ -1183,7 +1254,7 @@ function Gun.UpdateVisuals()
     end
     local c=Combat.Service()
     local actor=c and c.Replicator and c.Replicator.LocalActor
-    local weapon=actor and actor._inventory and actor._inventory[actor._equipped]
+    local weapon=Combat.Weapon()
     local model=weapon and weapon._firearm and actor.ViewModel and actor.ViewModel.CurrentModel
     if model~=Gun.visualModel then Gun.RestoreVisuals() end
     if not model or not model.Parent then return end
@@ -1377,6 +1448,7 @@ function Gun.Resolve()
 end
 function Gun.Destroy()
     Gun.active=false
+    for weapon in pairs(Gun.modeWeapons or {}) do Gun.RestoreModes(weapon) end
     Gun.RestoreModes(Gun.modeWeapon)
     Gun.RestoreTunes()
     Gun.RestoreVisuals()
@@ -1480,7 +1552,7 @@ do
     end
     toggle(GunBallistics,"Instant Bullet",Gun,"InstantBullet","gun_instant_bullet")
     slider(GunBallistics,"Bullet Speed",Gun,"BulletMultiplier","gun_bullet_multiplier",1,10,1,.1,"x")
-    GunBallistics:AddLabel({Text="Your bullet will be invalidated sometimes"})
+    GunBallistics:AddLabel({Text="O servidor pode não validar velocidade ou impactos modificados."})
     toggle(GunHandling,"RPM Modifier",Gun,"RPM","gun_rpm_enabled")
     slider(GunHandling,"RPM",Gun,"RPMValue","gun_rpm_value",60,3000,900,10," RPM")
     toggle(GunHandling,"No Equip Delay",Gun,"NoEquipDelay","gun_no_equip_delay")
@@ -1488,13 +1560,14 @@ do
     toggle(GunHandling,"Sight Zoom",Gun,"SightZoom","gun_sight_zoom")
     slider(GunHandling,"Sight Magnification",Gun,"Zoom","gun_sight_magnification",1,10,2,.1,"x")
     toggle(GunVisualSection,"Gun Debug HUD",Gun,"Debug","gun_debug_hud")
-    local mp=MainWindow:AddTab({Text="Melee Aura (wip)",Pages={"Settings"}})
+    local mp=MainWindow:AddTab({Text="Melee Aura",Pages={"Settings"}})
     local ml=mp:AddSection({Title="Melee",Side="Left"})
     local mr=mp:AddSection({Title="Kill Aura",Side="Right"})
     toggle(ml,"Melee Force Headshot",A,"Headshot","melee_force_headshot")
     toggle(ml,"Extended Reach",A,"Reach","melee_extended_reach")
     slider(ml,"Reach Distance",A,"Distance","melee_reach_distance",1,20,8,.5," studs")
     toggle(ml,"360° Reach Assist",A,"Omni","melee_omni_reach")
+    ml:AddLabel({Text="Com Extended Reach: cada golpe busca um alvo ou objeto visível no raio selecionado."})
     toggle(mr,"Kill Aura",A,"Aura","melee_kill_aura")
     A.key=mr:AddKeyPicker({Text="Kill Aura Key",Flag="melee_aura_key",Default=Enum.KeyCode.K,Mode="Toggle",Callback=function() end})
     mr:AddDropdown({Text="Targets",Flag="melee_aura_targets",Options={"Zombie","NPC","Player"},Default={"Zombie","NPC"},Multi=true,
@@ -1522,11 +1595,7 @@ do
     toggle(ts,"No Spread",T,"NoSpread","turret_no_spread")
     toggle(ts,"No Recoil",T,"NoRecoil","turret_no_recoil")
     local function applyGun(w)
-        if not localWeapon(w) or not w._firearm then return end
-        local tune=w._firearm.Tune
-        Gun.ApplyField(tune,"Barrel_Spread",Gun.NoSpread,function(base) return (base or 1)*(1-Gun.SpreadReduction/100) end)
-        Gun.ApplyField(tune,"RPM",Gun.RPM,function() return Gun.RPMValue end)
-        Gun.ApplyField(tune,"Equip_Delay",Gun.NoEquipDelay,function() return 0 end)
+        if localWeapon(w) then Gun.ApplyWeapon(w) end
     end
     local function applyTurret(ctrl)
         if not ctrl or type(ctrl._config)~="table" then return end
@@ -1539,6 +1608,11 @@ do
     local installers={}
     installers.FirearmInventory=function(c)
         Gun.firearmClass=c
+        for _,method in ipairs({"_discharge","_switchFiremode"}) do
+            Gun.Hook(c,method,function(original) return function(w,...)
+                applyGun(w);return original(w,...)
+            end end)
+        end
         Gun.Hook(c,"Discharge",function(original) return function(w,...)
             if not localWeapon(w) then return original(w,...) end
             applyGun(w)
@@ -1651,7 +1725,7 @@ do
             if self._actor==actor() and A.auraActive and A.target and A.target.Parent then
                 local origin=self._actor.CFrame:PointToWorldSpace(Vector3.new(0,2.5,0))
                 direction=A.target.Position-origin
-                local me=actor();local weapon=me and me._inventory and me._inventory[me._equipped]
+                local me=actor();local weapon=Combat.Weapon()
                 local range=A.Reach and A.Distance or (weapon and weapon._distance or 0)
                 if direction.Magnitude>range then return end
             elseif self._actor==actor() and A.Reach and A.Omni then
@@ -1725,7 +1799,7 @@ do
         end end)
     end
     local baseUpdate=Gun.UpdateTune
-    Gun.UpdateTune=function() baseUpdate();local me=actor();applyGun(me and me._inventory and me._inventory[me._equipped]) end
+    Gun.UpdateTune=function() baseUpdate();local me=actor();applyGun(Combat.Weapon()) end
     local R: {[string]: any}={Enabled=false,rows={},byId={},limit=150,connections={},active=true,count=0}
     Combat.Radio=R
     local radioSection=SharedPage:AddSection({Title="Radio Logger",Side="Right"})
@@ -1750,9 +1824,9 @@ do
         header.BackgroundTransparency=1;header.Text="RADIO LOGGER";header.TextColor3=Color3.fromRGB(225,230,238)
         header.Font=Enum.Font.GothamBold;header.TextSize=13;header.TextXAlignment=Enum.TextXAlignment.Left;header.Active=true;header.Parent=frame
         local clear=Instance.new("TextButton");clear.Name="Clear";clear.Size=UDim2.fromOffset(60,26);clear.Position=UDim2.new(1,-68,0,4)
-        clear.BackgroundColor3=Color3.fromRGB(37,42,51);clear.BorderSizePixel=0;clear.Text="Limpar";clear.TextColor3=Color3.new(1,1,1);clear.Font=Enum.Font.Gotham;clear.TextSize=12;clear.Parent=frame
+        clear.BackgroundColor3=Color3.fromRGB(37,42,51);clear.BorderSizePixel=0;clear.Text="Clear";clear.TextColor3=Color3.new(1,1,1);clear.Font=Enum.Font.Gotham;clear.TextSize=12;clear.Parent=frame
         local status=Instance.new("TextLabel");status.Size=UDim2.new(1,-24,0,20);status.Position=UDim2.fromOffset(12,32)
-        status.BackgroundTransparency=1;status.Text="Received • 0 / 150";status.TextColor3=Color3.fromRGB(150,160,177)
+        status.BackgroundTransparency=1;status.Text="Mensagens de rádio recebidas • 0 / 150";status.TextColor3=Color3.fromRGB(150,160,177)
         status.Font=Enum.Font.Gotham;status.TextSize=11;status.TextXAlignment=Enum.TextXAlignment.Left;status.Parent=frame
         local scroll=Instance.new("ScrollingFrame");scroll.Name="Messages";scroll.Position=UDim2.fromOffset(10,58);scroll.Size=UDim2.new(1,-20,1,-68)
         scroll.BackgroundTransparency=1;scroll.BorderSizePixel=0;scroll.ScrollBarThickness=4;scroll.ScrollBarImageColor3=Color3.fromRGB(111,139,175)
@@ -1843,7 +1917,7 @@ do
         end
         V.flyActive=V.Fly and Combat.KeyActive(V.key,V.keyState)
         A.auraActive=A.Aura and Combat.KeyActive(A.key,A.keyState)
-        local me=actor();local w=me and me._inventory and me._inventory[me._equipped]
+        local me=actor();local w=Combat.Weapon()
         if X.meleeWeapon~=w then if X.meleeWeapon then restore(X.meleeWeapon);if X.autoSwing then X.meleeWeapon._swinging=false end end;X.meleeWeapon=w;X.autoSwing=false end
         if w and not w._firearm and type(w._distance)=="number" then
             field(w,"_distance",A.Reach,A.Distance)
@@ -2205,7 +2279,7 @@ local Sense = (function()
         if not t.enabled or not (t.box or t.box3d or t.boxFill or t.name or t.weapon
             or t.distance or t.healthBar or t.healthText or t.tracer or t.offScreenArrow
             or enabledChams or enabledSkeleton) then return end
-        if kind=="players" and t.teamCheck and AimLocalPlayer.Team~=nil and a.Owner.Team==AimLocalPlayer.Team then return end
+        if kind=="players" and t.teamCheck and Combat.IsTeammate(a) then return end
         -- Fail closed every frame, including owner changes and replacement models.
         if not t.enabled or not E.Kind(a) or a.Character~=o.model or not o.model.Parent
             or (kind~="corpses" and not Combat.IsAlive(a)) then return end
@@ -3015,6 +3089,16 @@ do
         local results = { origAddTab(self, ...) }
         if not captured then captured = results[1] end
         return table.unpack(results)
+    end
+    local originalLoadConfig=Library.LoadConfig
+    Library.LoadConfig=function(self,json)
+        local result=table.pack(originalLoadConfig(self,json))
+        Silent.Enabled=Library.Flags.silent_enabled==true
+        Combat.silentActive=Combat.KeyActive(SilentKeyPicker,keyStates.silent)
+        Combat.target=nil;Combat.sticky=nil;Combat.nextScan=0
+        Combat.Install()
+        Gun.UpdateTune()
+        return table.unpack(result,1,result.n)
     end
     local returned = Library:InitConfigs(MainWindow)
     MainWindow.AddTab = origAddTab
