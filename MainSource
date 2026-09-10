@@ -1495,7 +1495,6 @@ do
     toggle(ml,"Extended Reach",A,"Reach","melee_extended_reach")
     slider(ml,"Reach Distance",A,"Distance","melee_reach_distance",1,20,8,.5," studs")
     toggle(ml,"360° Reach Assist",A,"Omni","melee_omni_reach")
-    ml:AddLabel({Text="Com Extended Reach: cada golpe busca um alvo ou objeto visível no raio selecionado."})
     toggle(mr,"Kill Aura",A,"Aura","melee_kill_aura")
     A.key=mr:AddKeyPicker({Text="Kill Aura Key",Flag="melee_aura_key",Default=Enum.KeyCode.K,Mode="Toggle",Callback=function() end})
     mr:AddDropdown({Text="Targets",Flag="melee_aura_targets",Options={"Zombie","NPC","Player"},Default={"Zombie","NPC"},Multi=true,
