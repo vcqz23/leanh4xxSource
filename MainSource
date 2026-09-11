@@ -1,4 +1,4 @@
-=if getgenv().LeanCombat then pcall(getgenv().LeanCombat.Destroy) end
+if getgenv().LeanCombat then pcall(getgenv().LeanCombat.Destroy) end
 if getgenv().LeanNPCESP then pcall(getgenv().LeanNPCESP.Unload) end
 if getgenv().CodexNPCESP then pcall(getgenv().CodexNPCESP.Destroy) end
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/vcqz23/settings/refs/heads/main/V2"))()
