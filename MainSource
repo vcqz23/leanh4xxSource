@@ -92,7 +92,7 @@ local TriggerBotSettings = {
 local Rage = {
     Enabled=false,Targets={NPCs=true,Zombies=true,Players=true},HitPart="Head",
     Hitscan=true,TeamCheck=true,VisibleCheck=true,FullCircle=true,
-    MaxDistance=1000,FOVEnabled=false,AutoPrediction=true,BulletDropCompensation=true,
+DistanceCheck=true,MaxDistance=1000,FOVEnabled=false,AutoPrediction=true,BulletDropCompensation=true,
 }
 local Combat: {[string]: any} = {
     Silent=Silent,Trigger=TriggerBotSettings,Rage=Rage,active=true,actors={},samples={},parts={},
@@ -319,7 +319,8 @@ function Combat.FindTarget(settings,camera,mouse,sticky)
     camera=camera or workspace.CurrentCamera;mouse=mouse or aim_getMouseLocation()
     local origin=Combat.Origin(camera)
     local function candidate(a)
-        if not Combat.Allowed(a,settings) or (a.Position-origin).Magnitude>settings.MaxDistance then return nil end
+        if not Combat.Allowed(a,settings) then return nil end
+        if settings.DistanceCheck~=false and (a.Position-origin).Magnitude>settings.MaxDistance then return nil end
         local function check(part,requireVisible)
             if not part or not part.Parent or not part:IsDescendantOf(a.Character) then return nil end
             local point=Combat.PartPosition(a,part)
@@ -706,6 +707,8 @@ do
     end})
     section:AddToggle({Text="Visible Check",Flag="rage_visiblecheck",Default=true,Callback=function(v) Rage.VisibleCheck=v end})
     section:AddToggle({Text="Team Check",Flag="rage_teamcheck",Default=true,Callback=function(v) Rage.TeamCheck=v end})
+    section:AddToggle({Text="Distance Check",Flag="rage_distancecheck",Default=true,Callback=function(v) Rage.DistanceCheck=v end})
+    section:AddSlider({Text="Max Distance",Flag="rage_distance",Min=1,Max=5000,Default=1000,Rounding=1,Suffix=" studs",Callback=function(v) Rage.MaxDistance=v end})
     section:AddToggle({Text="Hitscan",Flag="rage_hitscan",Default=true,Callback=function(v) Rage.Hitscan=v end})
     section:AddDropdown({Text="Hit Part",Flag="rage_hitpart",Options={"Head","HumanoidRootPart","UpperTorso","LowerTorso","LeftUpperArm","RightUpperArm","LeftUpperLeg","RightUpperLeg"},Default="Head",Callback=function(v) Rage.HitPart=v end})
     section:AddDropdown({Text="Target Selection",Flag="rage_targets",Options={"NPCs","Zombies","Players"},Default={"NPCs","Zombies","Players"},Multi=true,Callback=function(v) Combat.SetTargets(Rage,v) end})
