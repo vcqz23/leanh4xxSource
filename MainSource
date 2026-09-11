@@ -52,7 +52,7 @@ end
 -- Create window
 local MainWindow = Library:CreateWindow({
     Title = "Lean",
-    SubText = "V2 | BRM5",
+    SubText = "V2.1 | BRM5",
     IsMobile = false,
 
     -- "wave" | "rainbow" | "pulse" | "gradient"
@@ -68,6 +68,7 @@ local MainWindow = Library:CreateWindow({
 })
 
 local SilentAimPage, TriggerPage = MainWindow:AddTab({Text="Combat",Pages={"Silent Aim","Trigger Bot"}})
+local RagePage = MainWindow:AddTab({Text="Ragebot",Pages={"Settings"}})
 local NpcPage, PlayersPage, ZombiePage, CorpsePage, SharedPage = MainWindow:AddTab({Text="Visuals",Pages={"NPCs","Players","Zombies","Corpses","Settings"}})
 -- Combat targeting uses the same custom actor registry as the NPC ESP.
 local AimPlayers = game:GetService("Players")
@@ -88,8 +89,13 @@ local TriggerBotSettings = {
     Enabled=false,Targets={NPCs=true,Players=true},TeamCheck=false,VisibleCheck=true,
     MaxDistance=1000,ReactionTime=50,ShootTime=100,Magnetic=false,
 }
+local Rage = {
+    Enabled=false,Targets={NPCs=true,Zombies=true,Players=true},HitPart="Head",
+    Hitscan=true,TeamCheck=true,VisibleCheck=true,FullCircle=true,
+    MaxDistance=1000,FOVEnabled=false,AutoPrediction=true,BulletDropCompensation=true,
+}
 local Combat: {[string]: any} = {
-    Silent=Silent,Trigger=TriggerBotSettings,active=true,actors={},samples={},parts={},
+    Silent=Silent,Trigger=TriggerBotSettings,Rage=Rage,active=true,actors={},samples={},parts={},
     sticky=nil,target=nil,nextScan=0,lastShot=0,targetSince=0,triggerActor=nil,
     connections={},drawings={},hookState="Waiting for game adapter",
 }
@@ -211,7 +217,9 @@ function Combat.Sync(force)
                     if measured.Magnitude<.1 then vel=Vector3.zero end
                 end
             end
-            Combat.samples[a]={position=a.Position,time=now,velocity=vel,model=a.Character,root=a.RootPart}
+            local sample=old or {}
+            sample.position=a.Position;sample.time=now;sample.velocity=vel
+            sample.model=a.Character;sample.root=a.RootPart;Combat.samples[a]=sample
             -- Keep velocity sampling frequent while limiting body-part discovery.
             local cached=Combat.parts[a]
             if not cached or cached.model~=a.Character or cached.root~=a.RootPart or now>=(cached.refreshAt or 0) then
@@ -312,26 +320,28 @@ function Combat.FindTarget(settings,camera,mouse,sticky)
     local origin=Combat.Origin(camera)
     local function candidate(a)
         if not Combat.Allowed(a,settings) or (a.Position-origin).Magnitude>settings.MaxDistance then return nil end
-        local function check(part)
+        local function check(part,requireVisible)
             if not part or not part.Parent or not part:IsDescendantOf(a.Character) then return nil end
             local point=Combat.PartPosition(a,part)
             local sp,on=camera:WorldToViewportPoint(point)
-            if not on then return nil end
-            local d=(Vector2.new(sp.X,sp.Y)-mouse).Magnitude
+            if not settings.FullCircle and not on then return nil end
+            local d=settings.FullCircle and (point-origin).Magnitude or (Vector2.new(sp.X,sp.Y)-mouse).Magnitude
             if settings.FOVEnabled and d>settings.FOV then return nil end
-            if (settings.VisibleCheck or settings.Hitscan) and not Combat.Visible(a,point,camera) then return nil end
+            if (settings.VisibleCheck or requireVisible) and not Combat.Visible(a,point,camera) then return nil end
             return {actor=a,part=part,position=point,distance=d}
         end
         local preferred=Combat.PickPart(a,settings,camera,mouse)
-        local selected=check(preferred)
+        local selected=check(preferred,settings.Hitscan)
         if selected or not settings.Hitscan then return selected end
         local best
         for _,part in ipairs((Combat.parts[a] or {}).list or {}) do
             if part~=preferred and part~=a.RootPart then
-                local hit=check(part)
+                local hit=check(part,true)
                 if hit and (not best or hit.distance<best.distance) then best=hit end
             end
         end
+        -- Hitscan prefers exposed parts; Visible Check controls whether an occluded fallback is allowed.
+        if not best and settings.FullCircle and not settings.VisibleCheck then return check(preferred,false) end
         return best
     end
     if settings.StickyAim and sticky then local current=candidate(sticky);if current then return current end end
@@ -423,7 +433,7 @@ function Combat.Frame()
     if not Combat.active then return end
     AimCamera=workspace.CurrentCamera
     if not AimCamera then return end
-    if Silent.Enabled and not Combat.installed and (not Combat.retryAt or os.clock()>=Combat.retryAt) then
+    if (Silent.Enabled or Rage.Enabled) and not Combat.installed and (not Combat.retryAt or os.clock()>=Combat.retryAt) then
         Combat.retryAt=os.clock()+2
         Combat.Install()
     end
@@ -431,6 +441,15 @@ function Combat.Frame()
     local blocked=menuOpen or AimUIS:GetFocusedTextBox()~=nil
     Combat.silentActive=Combat.KeyActive(SilentKeyPicker,keyStates.silent)
     local triggerActive=Combat.KeyActive(TriggerKeyPicker,keyStates.trigger)
+    if Rage.Enabled then
+        Combat.target=nil;Combat.sticky=nil;Combat.triggerActor=nil
+        if not blocked and Combat.installed and os.clock()>=(Combat.rageNextShot or 0) then
+            Combat.rageNextShot=os.clock()+.1
+            local weapon=Combat.Weapon()
+            if weapon and weapon._firearm and Combat.FindTarget(Rage,AimCamera) then Combat.Fire() end
+        end
+        return
+    end
     if not blocked and Silent.Enabled and Combat.silentActive then
         Combat.target=Combat.FindTarget(Silent,nil,nil,Combat.sticky)
         Combat.sticky=Combat.target and Combat.target.actor
@@ -441,6 +460,7 @@ function Combat.Frame()
     else Combat.triggerActor=nil;Combat.targetSince=0 end
 end
 function Combat.Destroy()
+    Rage.Enabled=false
     Combat.active=false;Silent.Enabled=false;TriggerBotSettings.Enabled=false;Combat.target=nil
     if Combat.Unhook then Combat.Unhook() end
     for _,c in ipairs(Combat.connections) do c:Disconnect() end
@@ -483,25 +503,26 @@ function Combat.Intercept(origin,point,velocity,speed,compensateDrop)
     end
     return aim,time
 end
-function Combat.ShotFrame(weapon,cf,target)
+function Combat.ShotFrame(weapon,cf,target,settings)
+    settings=settings or Silent
     if typeof(cf)~="CFrame" or not target then return cf end
     local tune=weapon._firearm and weapon._firearm.Tune
     local bulletService=Combat.bulletService
-    if (not Silent.AutoPrediction and not Silent.BulletDropCompensation)
+    if (not settings.AutoPrediction and not settings.BulletDropCompensation)
         or not tune or not bulletService then return Combat.RedirectMuzzle(cf,target) end
     local ok,speed=pcall(bulletService.GetInfo,bulletService,tune.Caliber,tune.Barrel)
     if not ok or type(speed)~="number" or speed<=0 then return Combat.RedirectMuzzle(cf,target) end
     local sample=Combat.samples[target.actor]
-    local velocity=Silent.AutoPrediction and sample and os.clock()-sample.time<.35 and sample.velocity or Vector3.zero
+    local velocity=settings.AutoPrediction and sample and os.clock()-sample.time<.35 and sample.velocity or Vector3.zero
     local point=Combat.PartPosition(target.actor,target.part)
-    local aim=Combat.Intercept(cf.Position,point,velocity,speed,Silent.BulletDropCompensation)
+    local aim=Combat.Intercept(cf.Position,point,velocity,speed,settings.BulletDropCompensation)
     local frame=Combat.RedirectMuzzle(cf,{position=aim})
     -- Discharge adds the sight's zeroing angle after GetMuzzleCFrame.
     -- Remove it here so it does not add a second correction to the trajectory.
     local actor=weapon._actor
     local zero=actor and actor.ADS and actor.ViewModel and actor.ViewModel.Zero
     if type(zero)=="table" then zero=zero[4] end
-    if Silent.BulletDropCompensation and type(zero)=="number" then
+    if settings.BulletDropCompensation and type(zero)=="number" then
         local angle=math.asin(math.clamp(zero*32.2/(speed*speed),-1,1))*.5
         frame=frame*CFrame.Angles(-angle,0,0)
     end
@@ -531,14 +552,15 @@ function Combat.Install()
         local oldContext=contexts[thread]
         local c=Combat.Service();local me=c and c.Replicator and c.Replicator.LocalActor
         local selected
+        local settings=Rage.Enabled and Rage or Silent
         -- An actual firearm discharge is already a game-accepted shot. UI menu
         -- visibility must not cancel its aim correction; typing still blocks it.
-        if Combat.active and Silent.Enabled and Combat.silentActive and weapon._actor==me
+        if Combat.active and settings.Enabled and (Rage.Enabled or Combat.silentActive) and weapon._actor==me
             and not AimUIS:GetFocusedTextBox()
-            and math.random(1,100)<=Silent.HitChance then
-            selected=Combat.FindTarget(Silent,nil,nil,Combat.sticky)
+            and math.random(1,100)<=(settings.HitChance or 100) then
+            selected=Combat.FindTarget(settings,nil,nil,Combat.sticky)
         end
-        contexts[thread]=selected and {weapon=weapon,target=selected} or nil
+        contexts[thread]=selected and {weapon=weapon,target=selected,settings=settings} or nil
         local result=table.pack(pcall(originalDischarge,weapon,...))
         contexts[thread]=oldContext
         if not result[1] then error(result[2],0) end
@@ -547,8 +569,8 @@ function Combat.Install()
     local function muzzle(weapon,...)
         local result=table.pack(originalMuzzle(weapon,...))
         local ctx=contexts[coroutine.running()]
-        if Combat.active and Silent.Enabled and ctx and ctx.weapon==weapon and Combat.Allowed(ctx.target.actor,Silent) then
-            result[1]=Combat.ShotFrame(weapon,result[1],ctx.target)
+        if Combat.active and ctx and ctx.settings.Enabled and ctx.weapon==weapon and Combat.Allowed(ctx.target.actor,ctx.settings) then
+            result[1]=Combat.ShotFrame(weapon,result[1],ctx.target,ctx.settings)
         end
         return table.unpack(result,1,result.n)
     end
@@ -676,6 +698,18 @@ end)
 
 
 local SilentLeft = SilentAimPage:AddSection({ Title = "Silent Aim", Side = "Left" })
+do
+    local section=RagePage:AddSection({Title="Ragebot",Side="Left"})
+    section:AddToggle({Text="Ragebot",Flag="rage_enabled",Default=false,Callback=function(v)
+        Rage.Enabled=v;Combat.rageNextShot=0
+        if v then Combat.Install() end
+    end})
+    section:AddToggle({Text="Visible Check",Flag="rage_visiblecheck",Default=true,Callback=function(v) Rage.VisibleCheck=v end})
+    section:AddToggle({Text="Team Check",Flag="rage_teamcheck",Default=true,Callback=function(v) Rage.TeamCheck=v end})
+    section:AddToggle({Text="Hitscan",Flag="rage_hitscan",Default=true,Callback=function(v) Rage.Hitscan=v end})
+    section:AddDropdown({Text="Hit Part",Flag="rage_hitpart",Options={"Head","HumanoidRootPart","UpperTorso","LowerTorso","LeftUpperArm","RightUpperArm","LeftUpperLeg","RightUpperLeg"},Default="Head",Callback=function(v) Rage.HitPart=v end})
+    section:AddDropdown({Text="Target Selection",Flag="rage_targets",Options={"NPCs","Zombies","Players"},Default={"NPCs","Zombies","Players"},Multi=true,Callback=function(v) Combat.SetTargets(Rage,v) end})
+end
 
 SilentLeft:AddToggle({
     Text = "Enabled",
@@ -1513,7 +1547,7 @@ do
     local X: {[string]: any}={classes={},nextScan=0,shots=setmetatable({},{__mode="k"}),saved={},active=true}
     local V: {[string]: any}={Speed=false,SpeedValue=80,Stability=false,FastStart=false,Fly=false,FlySpeed=60,Noclip=false,keyState={}}
     local T={RPM=false,RPMValue=900,NoSpread=false,NoRecoil=false}
-    local A: {[string]: any}={Headshot=false,Reach=false,Omni=false,Distance=8,Aura=false,Targets={Zombies=true,NPCs=true},keyState={},nextSwing=0}
+    local A: {[string]: any}={Headshot=false,Reach=false,Distance=8,Aura=false,Targets={Zombies=true,NPCs=true},keyState={},nextSwing=0,nextTargetScan=0}
     Combat.Extensions=X;Combat.Vehicle=V;Combat.Turret=T;Combat.Melee=A
     Gun.InstantBullet=false;Gun.BulletMultiplier=1;Gun.RPM=false;Gun.RPMValue=900
     Gun.NoCameraShake=false;Gun.SightZoom=false;Gun.Zoom=2;Gun.NoEquipDelay=false;Gun.Debug=false
@@ -1552,7 +1586,7 @@ do
     end
     toggle(GunBallistics,"Instant Bullet",Gun,"InstantBullet","gun_instant_bullet")
     slider(GunBallistics,"Bullet Speed",Gun,"BulletMultiplier","gun_bullet_multiplier",1,10,1,.1,"x")
-    GunBallistics:AddLabel({Text="O servidor pode não validar velocidade ou impactos modificados."})
+    GunBallistics:AddLabel({Text="Server may reject bullets"})
     toggle(GunHandling,"RPM Modifier",Gun,"RPM","gun_rpm_enabled")
     slider(GunHandling,"RPM",Gun,"RPMValue","gun_rpm_value",60,3000,900,10," RPM")
     toggle(GunHandling,"No Equip Delay",Gun,"NoEquipDelay","gun_no_equip_delay")
@@ -1565,9 +1599,7 @@ do
     local mr=mp:AddSection({Title="Kill Aura",Side="Right"})
     toggle(ml,"Melee Force Headshot",A,"Headshot","melee_force_headshot")
     toggle(ml,"Extended Reach",A,"Reach","melee_extended_reach")
-    slider(ml,"Reach Distance",A,"Distance","melee_reach_distance",1,20,8,.5," studs")
-    toggle(ml,"360° Reach Assist",A,"Omni","melee_omni_reach")
-    ml:AddLabel({Text="Com Extended Reach: cada golpe busca um alvo ou objeto visível no raio selecionado."})
+    slider(ml,"Reach Distance",A,"Distance","melee_reach_distance",0,20,8,.5," studs")
     toggle(mr,"Kill Aura",A,"Aura","melee_kill_aura")
     A.key=mr:AddKeyPicker({Text="Kill Aura Key",Flag="melee_aura_key",Default=Enum.KeyCode.K,Mode="Toggle",Callback=function() end})
     mr:AddDropdown({Text="Targets",Flag="melee_aura_targets",Options={"Zombie","NPC","Player"},Default={"Zombie","NPC"},Multi=true,
@@ -1577,7 +1609,6 @@ do
             for k,v in pairs(values or {}) do local name=type(k)=="number" and v or (v and k);if map[name] then selected[map[name]]=true end end
             A.Targets=selected
         end})
-    mr:AddLabel({Text="Requer arma melee equipada. Respeita paredes e aliados."})
     local vp=MainWindow:AddTab({Text="Vehicle Mods",Pages={"Settings"}})
     local vl=vp:AddSection({Title="Driving",Side="Left"});local vr=vp:AddSection({Title="Flight",Side="Right"})
     toggle(vl,"Speed Mod",V,"Speed","vehicle_speed")
@@ -1639,6 +1670,7 @@ do
         end end)
         Gun.Hook(c,"Render",function(original) return function(camera,...)
             local suppress=Gun.active and Gun.NoCameraShake
+            if not suppress and not (Gun.active and Gun.SightZoom) then return original(camera,...) end
             local influences={}
             if suppress then
                 for _,shake in ipairs(camera._shakes or {}) do
@@ -1673,6 +1705,55 @@ do
         end end)
     end
     installers.MeleeInventory=function(c) A.class=c end
+    local meleeRay=RaycastParams.new()
+    meleeRay.FilterType=Enum.RaycastFilterType.Exclude
+    meleeRay.IgnoreWater=false
+    meleeRay.CollisionGroup="9"
+    function A.Range(weapon)
+        return A.Reach and A.Distance or (weapon and weapon._distance or 0)
+    end
+    function A.Allowed(target,me)
+        local kind=Combat.Kind(target)
+        return target~=me and kind and A.Targets[kind] and Combat.IsAlive(target)
+            and target.Character and target.Character.Parent
+            and not (kind=="Players" and Combat.IsTeammate(target))
+    end
+    function A.SelectTarget(me,weapon)
+        if not me or not me.CFrame then return nil end
+        local range=A.Range(weapon)
+        if range<=0 then return nil end
+        local origin=me.CFrame:PointToWorldSpace(Vector3.new(0,2.5,0))
+        local camera=workspace.CurrentCamera
+        local excluded={}
+        if me.Character then excluded[#excluded+1]=me.Character end
+        if camera then excluded[#excluded+1]=camera end
+        meleeRay.FilterDescendantsInstances=excluded
+        local replica=me._inventory and me._inventory[me._equipped]
+        local params=replica and replica._params or meleeRay
+        local service=Combat.Service()
+        local replicator=service and service.Replicator
+        local best,bestPart,nearest=nil,nil,range
+        -- Read the actor registry directly so melee works without any firearm feature enabled.
+        for _,target in pairs(replicator and replicator.Actors or {}) do
+            if A.Allowed(target,me) then
+                local head=target.Parts and target.Parts.Head
+                if head and head.Parent then
+                    local delta=Combat.PartPosition(target,head)-origin
+                    local distance=delta.Magnitude
+                    if distance>.001 and distance<=nearest then
+                        local hit=workspace:Raycast(origin,delta,params)
+                        local visible=not hit or hit.Instance:IsDescendantOf(target.Character)
+                        if not visible and type(replicator.GetFromBodyPart)=="function" then
+                            local uid=replicator:GetFromBodyPart(hit.Instance)
+                            visible=uid==target.UID
+                        end
+                        if visible then best=target;bestPart=head;nearest=distance end
+                    end
+                end
+            end
+        end
+        return best,bestPart
+    end
     function A.PickReachDirection(self,origin,range)
         local params=RaycastParams.new();params.FilterType=Enum.RaycastFilterType.Exclude
         local exclude={self._actor.Character}
@@ -1722,18 +1803,20 @@ do
     end
     installers.MeleeInventoryReplicator=function(c)
         Gun.Hook(c,"Impact",function(original) return function(self,direction,...)
-            if self._actor==actor() and A.auraActive and A.target and A.target.Parent then
+            if self._actor==actor() and A.auraActive then
+                -- Recheck after the swing delay: targets can move, die or become occluded.
+                local weapon=Combat.Weapon()
+                if not weapon or weapon._firearm or X.meleeWeapon~=weapon then return end
+                A.targetActor,A.target=A.SelectTarget(self._actor,weapon)
+                if not A.target then return end
                 local origin=self._actor.CFrame:PointToWorldSpace(Vector3.new(0,2.5,0))
-                direction=A.target.Position-origin
-                local me=actor();local weapon=Combat.Weapon()
-                local range=A.Reach and A.Distance or (weapon and weapon._distance or 0)
+                direction=Combat.PartPosition(A.targetActor,A.target)-origin
+                local range=A.Range(weapon)
                 if direction.Magnitude>range then return end
-            elseif self._actor==actor() and A.Reach and A.Omni then
-                local origin=self._actor.CFrame:PointToWorldSpace(Vector3.new(0,2.5,0))
-                direction=A.PickReachDirection(self,origin,A.Distance) or direction
             end
             if self._actor==actor() and A.Reach and typeof(direction)=="Vector3" and direction.Magnitude>A.Distance then direction=direction.Unit*A.Distance end
             local r=table.pack(original(self,direction,...))
+            if self._actor==actor() and A.auraActive then A.lastImpactUID=r[2];A.lastImpactAt=os.clock() end
             if self._actor==actor() and A.Headshot and r[2] then r[3]="Head" end
             return table.unpack(r,1,r.n)
         end end)
@@ -1826,7 +1909,7 @@ do
         local clear=Instance.new("TextButton");clear.Name="Clear";clear.Size=UDim2.fromOffset(60,26);clear.Position=UDim2.new(1,-68,0,4)
         clear.BackgroundColor3=Color3.fromRGB(37,42,51);clear.BorderSizePixel=0;clear.Text="Clear";clear.TextColor3=Color3.new(1,1,1);clear.Font=Enum.Font.Gotham;clear.TextSize=12;clear.Parent=frame
         local status=Instance.new("TextLabel");status.Size=UDim2.new(1,-24,0,20);status.Position=UDim2.fromOffset(12,32)
-        status.BackgroundTransparency=1;status.Text="Mensagens de rádio recebidas • 0 / 150";status.TextColor3=Color3.fromRGB(150,160,177)
+        status.BackgroundTransparency=1;status.Text="Radio messages received • 0 / 150";status.TextColor3=Color3.fromRGB(150,160,177)
         status.Font=Enum.Font.Gotham;status.TextSize=11;status.TextXAlignment=Enum.TextXAlignment.Left;status.Parent=frame
         local scroll=Instance.new("ScrollingFrame");scroll.Name="Messages";scroll.Position=UDim2.fromOffset(10,58);scroll.Size=UDim2.new(1,-20,1,-68)
         scroll.BackgroundTransparency=1;scroll.BorderSizePixel=0;scroll.ScrollBarThickness=4;scroll.ScrollBarImageColor3=Color3.fromRGB(111,139,175)
@@ -1869,7 +1952,7 @@ do
             if #R.rows>R.limit then local oldest=table.remove(R.rows,1);R.byId[oldest.id]=nil;oldest.label:Destroy() end
         end
         row.label.Text="["..tostring(channel).."] "..tostring(name)..": "..tostring(message)
-        R.status.Text="Mensagens de rádio recebidas • "..#R.rows.." / 150"
+        R.status.Text="Radio messages received • "..#R.rows.." / 150"
         if follow then task.defer(function()
             if R.active and R.scroll and R.scroll.Parent then R.scroll.CanvasPosition=Vector2.new(0,math.max(0,R.scroll.AbsoluteCanvasSize.Y-R.scroll.AbsoluteSize.Y)) end
         end) end
@@ -1905,7 +1988,7 @@ do
         destroyBeforeRadio()
     end
     function X.Frame()
-        if os.clock()>=X.nextScan then
+        if not X.modulesResolved and os.clock()>=X.nextScan then
             X.nextScan=os.clock()+3
             for _,module in ipairs(getloadedmodules()) do
                 local install=installers[module.Name]
@@ -1914,34 +1997,37 @@ do
                     if ok and type(c)=="table" then install(c);X.classes[module.Name]=c end
                 end
             end
+            X.modulesResolved=true
+            for name in pairs(installers) do if not X.classes[name] then X.modulesResolved=false;break end end
         end
         V.flyActive=V.Fly and Combat.KeyActive(V.key,V.keyState)
         A.auraActive=A.Aura and Combat.KeyActive(A.key,A.keyState)
         local me=actor();local w=Combat.Weapon()
-        if X.meleeWeapon~=w then if X.meleeWeapon then restore(X.meleeWeapon);if X.autoSwing then X.meleeWeapon._swinging=false end end;X.meleeWeapon=w;X.autoSwing=false end
+        if X.meleeWeapon~=w then
+            if X.meleeWeapon then restore(X.meleeWeapon);if X.autoSwing then X.meleeWeapon._swinging=false end end
+            X.meleeWeapon=w;X.autoSwing=false;A.target=nil;A.targetActor=nil;A.nextTargetScan=0
+        end
         if w and not w._firearm and type(w._distance)=="number" then
             field(w,"_distance",A.Reach,A.Distance)
-            A.target=nil
-            if A.auraActive and A.class and not me.Locked and not me.Sprinting then
-                local origin=me.CFrame:PointToWorldSpace(Vector3.new(0,2.5,0));local nearest=A.Reach and A.Distance or w._distance
-                for _,a in ipairs(Combat.actors) do
-                    local kind=Combat.Kind(a);local head=a.Parts and a.Parts.Head
-                    local friendly=kind=="Players" and a.Owner and a.Owner.Team~=nil and a.Owner.Team==AimLocalPlayer.Team
-                    if a~=me and A.Targets[kind] and not friendly and Combat.IsAlive(a) and head and head.Parent then
-                        local delta=head.Position-origin
-                        if delta.Magnitude<nearest then
-                            local params=RaycastParams.new();params.FilterType=Enum.RaycastFilterType.Exclude;params.FilterDescendantsInstances={me.Character}
-                            local hit=workspace:Raycast(origin,delta,params)
-                            if not hit or hit.Instance:IsDescendantOf(a.Character) then nearest=delta.Magnitude;A.target=head end
-                        end
-                    end
+            if A.auraActive and A.class and me and not me.Locked and not me.Sprinting then
+                if os.clock()>=A.nextTargetScan then
+                    A.nextTargetScan=os.clock()+.05
+                    A.targetActor,A.target=A.SelectTarget(me,w)
                 end
-            end
-            if A.target and not w._looping and os.clock()>=A.nextSwing then
+                if A.targetActor and not A.Allowed(A.targetActor,me) then A.target=nil;A.targetActor=nil end
+            else A.target=nil;A.targetActor=nil;A.nextTargetScan=0 end
+            if A.target and not w._looping and not A.swingPending and os.clock()>=A.nextSwing then
                 A.nextSwing=os.clock()+math.max(w._timer or .5,.1);X.autoSwing=true
-                task.spawn(function() local ok,err=pcall(A.class._use,w,true);if not ok then X.error=tostring(err) end end)
+                A.swingPending=true
+                task.spawn(function()
+                    local ok,err=pcall(function()
+                        if X.active and A.auraActive and A.target and Combat.Weapon()==w then A.class._use(w,true) end
+                    end)
+                    A.swingPending=false
+                    if not ok then X.error=tostring(err);w._swinging=false;w._looping=false end
+                end)
             elseif not A.target and X.autoSwing then w._swinging=false;X.autoSwing=false end
-        else A.target=nil end
+        else A.target=nil;A.targetActor=nil end
         if Gun.Debug then
             if not X.hud then
                 local gui=Instance.new("ScreenGui");gui.Name="LeanGunDebug";gui.ResetOnSpawn=false;gui.Parent=AimLocalPlayer:WaitForChild("PlayerGui")
@@ -3079,8 +3165,8 @@ wm_setVisible(wmShadowSoftness, false)
 wm_setVisible(wmTechDropdown, false)
 
 -- ── Settings tab (Configs + Fonts + Theming) ──────────────────
--- Captura a tab Settings mesmo em builds antigos da lib (que não retornam
--- a tab do InitConfigs): intercepta o AddTab feito pelo InitConfigs.
+-- Capture the Settings tab even in older library builds that do not return
+-- it from InitConfigs: intercept the AddTab call made by InitConfigs.
 local SettingsTab
 do
     local captured
@@ -3105,15 +3191,15 @@ do
     SettingsTab = returned or captured
 end
 
--- Última linha de defesa: tab própria.
+-- Final fallback: create a dedicated tab.
 if not SettingsTab then
     SettingsTab = MainWindow:AddTab({ Text = "UI", Pages = {"Effects"} })
 end
 
 -- ── Title/Subtitle effect engine ────────────────────────────
--- Funciona com QUALQUER versão da lib:
---   • lib nova   → usa os setters nativos (SetTitleWaveStyle etc.)
---   • lib antiga → desliga o wave interno e anima os gradients localmente
+-- Supports any library version:
+--   • New library → use native setters (SetTitleWaveStyle, etc.).
+--   • Old library → disable the internal wave and animate gradients locally.
 local WaveStyles = { "wave", "rainbow", "pulse", "gradient" }
 local NativeFx = (type(MainWindow.WaveStyles) == "table")
 
@@ -3124,7 +3210,7 @@ local Fx = {
 }
 
 if not NativeFx then
-    -- Para a animação interna da lib antiga (senão as duas brigam pelo Offset)
+    -- Stop the old library's internal animation to prevent competing Offset updates.
     pcall(function() MainWindow:SetTitleWaveEnabled(false) end)
     pcall(function() MainWindow:SetWaveEnabled(false) end)
 
@@ -3197,7 +3283,7 @@ if not NativeFx then
     end)
 end
 
--- Setters unificados (nativo ou engine local)
+-- Unified setters (native or local animation engine).
 local function fxSetStyle(which, v)
     if NativeFx then
         if which == "Title" then MainWindow:SetTitleWaveStyle(v) else MainWindow:SetWaveStyle(v) end
@@ -3225,7 +3311,7 @@ local function fxSetColors(which, a, b)
     end
 end
 
--- ── Title/Subtitle effect settings (na tab Settings) ──────────
+-- ── Title/Subtitle effect settings (Settings tab) ──────────
 local TitleFxSec = SettingsTab:AddSection({
     Title = "Title Effect",
     Side = "Left"
