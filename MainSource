@@ -378,12 +378,11 @@ function Combat.FindTarget(settings,camera,mouse,sticky)
     end
     return best
 end
-local triggerAxes = {"X", "Y", "Z"}
 function Combat.RayBox(origin,direction,cf,size)
     local p=cf:PointToObjectSpace(origin)
     local d=cf:VectorToObjectSpace(direction)
     local half=size*.5;local lo,hi=0,math.huge
-    for _,axis in ipairs(triggerAxes) do
+    for _,axis in ipairs({"X","Y","Z"}) do
         if math.abs(d[axis])<1e-6 then if math.abs(p[axis])>half[axis] then return nil end
         else
             local a,b=(-half[axis]-p[axis])/d[axis],(half[axis]-p[axis])/d[axis]
@@ -406,33 +405,13 @@ function Combat.TriggerTarget(settings,camera,mouse)
     local closest,nearest=nil,settings.MaxDistance
     -- Test all actor bodies before applying the target filter: an excluded player
     -- in front of an NPC must block the trigger, rather than shooting through it.
-    local origin,direction=ray.Origin,ray.Direction
-    local directionLengthSquared=direction:Dot(direction)
-    if directionLengthSquared<1e-12 then return nil end
     for _,a in ipairs(Combat.actors) do
-        local cached=Combat.parts[a]
-        local root=a.RootPart
-        if cached and root and a.Character and a.Character.Parent and Combat.IsAlive(a) then
-            -- Parked rigs share one actor transform; compute it once per actor.
-            local actorTransform
-            if not root:IsDescendantOf(workspace) then
-                local rotation=typeof(a.CFrame)=="CFrame" and a.CFrame.Rotation or CFrame.identity
-                actorTransform=(rotation+a.Position)*root.CFrame:Inverse()
-            end
-            for _,p in ipairs(cached.list) do
+        if Combat.IsAlive(a) and a.RootPart and a.Character and a.Character.Parent then
+            local delta=a.Position-a.RootPart.Position
+            for _,p in ipairs((Combat.parts[a] or {}).list or {}) do
                 if p.Parent then
-                    local cf=p.CFrame
-                    if actorTransform then cf=actorTransform*cf end
-                    local size=p.Size
-                    -- Reject parts outside the finite ray segment using an enclosing sphere.
-                    -- The exact oriented-box test still decides every possible intersection.
-                    local offset=cf.Position-origin
-                    local along=math.clamp(offset:Dot(direction)/directionLengthSquared,0,nearest)
-                    local separation=offset-direction*along
-                    if separation:Dot(separation)<=size:Dot(size)*.25+1e-5 then
-                        local hit=Combat.RayBox(origin,direction,cf,size)
-                        if hit and hit<nearest then nearest=hit;closest=a end
-                    end
+                    local hit=Combat.RayBox(ray.Origin,ray.Direction,Combat.PartCFrame(a,p),p.Size)
+                    if hit and hit<nearest then nearest=hit;closest=a end
                 end
             end
         end
@@ -3036,7 +3015,7 @@ local WatermarkConnection = game:GetService('RunService').RenderStepped:Connect(
     end;
 
     local stats: any = game:GetService('Stats')
-    Library:SetWatermark(('Linoria | %d fps | %d ms'):format(
+    Library:SetWatermark(('Lean V2.5 | %d fps | %d ms'):format(
         math.floor(FPS),
         math.floor(stats.Network.ServerStatsItem['Data Ping']:GetValue())
     ));
