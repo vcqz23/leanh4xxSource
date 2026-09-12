@@ -23,11 +23,20 @@ end
 do
     local addKeyPicker = Library.AddKeyPicker
     Library.AddKeyPicker = function(self,data)
-        if data and data.Text=="Menu bind" and data.Default==nil and data.Key==nil then
+        local menuBind=data and data.Text=="Menu bind"
+        local initializing=true
+        if menuBind then
             data=table.clone(data)
-            data.Default=Enum.KeyCode.RightShift
+            if data.Default==nil and data.Key==nil then data.Default=Enum.KeyCode.RightShift end
+            data.Active=Library.Window and Library.Window.Visible==true
+            local callback=data.Callback
+            data.Callback=function(value)
+                if not initializing and callback then callback(value) end
+            end
         end
         local control=addKeyPicker(self,data)
+        initializing=false
+        if menuBind then Library.MenuKeyPicker=control end
         local set=control.Set
         control.Set=function(value)
             if type(value)=="table" then
@@ -52,7 +61,7 @@ end
 -- Create window
 local MainWindow = Library:CreateWindow({
     Title = "Lean",
-    SubText = "V2.1 | BRM5",
+    SubText = "V2.2 | BRM5",
     IsMobile = false,
 
     -- "wave" | "rainbow" | "pulse" | "gradient"
@@ -67,6 +76,33 @@ local MainWindow = Library:CreateWindow({
     TitleWaveStyle = "wave",
 })
 
+do
+    local setVisible=MainWindow.SetVisible
+    local pending=false
+    local desired=MainWindow.Visible==true
+    MainWindow.SetVisible=function(value)
+        desired=value==true
+        MainWindow.Visible=desired
+        local picker=Library.MenuKeyPicker
+        if picker then
+            picker.Active=desired
+            local flag=Library.Flags[picker.Flag]
+            if type(flag)=="table" then flag.Active=desired;flag.active=desired end
+        end
+        -- Keep the latest request instead of interrupting or losing an in-progress fade.
+        pending=true
+        if not MainWindow.Tweening then
+            pending=false
+            setVisible(desired)
+        end
+    end
+    Library:Connect(game:GetService("RunService").Heartbeat,function()
+        if pending and not MainWindow.Tweening then
+            pending=false
+            setVisible(desired)
+        end
+    end)
+end
 local SilentAimPage, TriggerPage = MainWindow:AddTab({Text="Combat",Pages={"Silent Aim","Trigger Bot"}})
 local RagePage = MainWindow:AddTab({Text="Ragebot",Pages={"Settings"}})
 local NpcPage, PlayersPage, ZombiePage, CorpsePage, SharedPage = MainWindow:AddTab({Text="Visuals",Pages={"NPCs","Players","Zombies","Corpses","Settings"}})
@@ -92,7 +128,7 @@ local TriggerBotSettings = {
 local Rage = {
     Enabled=false,Targets={NPCs=true,Zombies=true,Players=true},HitPart="Head",
     Hitscan=true,TeamCheck=true,VisibleCheck=true,FullCircle=true,
-DistanceCheck=true,MaxDistance=1000,FOVEnabled=false,AutoPrediction=true,BulletDropCompensation=true,
+    DistanceCheck=true,MaxDistance=1000,FOVEnabled=false,AutoPrediction=true,BulletDropCompensation=true,
 }
 local Combat: {[string]: any} = {
     Silent=Silent,Trigger=TriggerBotSettings,Rage=Rage,active=true,actors={},samples={},parts={},
@@ -960,7 +996,7 @@ TriggerRight:AddSlider({Text="Max Distance",Flag="trigger_distance",Min=50,Max=5
 do
     local MovementPage,FlightPage=MainWindow:AddTab({Text="Movement",Pages={"Movement","Flight"}})
     local M={active=true,hooks={},Speed=false,SpeedValue=24,Smoothing=false,Stamina=false,
-        Penalties=false,Survival=false,Fly=false,FlySpeed=40,Modifier=false,Multiplier=2,Noclip=false,
+        Penalties=false,Survival=false,NoFallDamage=false,Fly=false,FlySpeed=40,Modifier=false,Multiplier=2,Noclip=false,
         speedState={},flyState={},modifierState={}}
     Combat.Movement=M
     local left=MovementPage:AddSection({Title="Movement",Side="Left"})
@@ -980,6 +1016,7 @@ do
     toggle(left,"Aim / Shoot While Sprinting","SprintCombat")
     toggle(right,"Infinite Stamina","Stamina")
     toggle(right,"No Speed Penalties","Penalties")
+    toggle(right,"No Fall Damage","NoFallDamage")
     toggle(flight,"Fly","Fly")
     flight:AddSlider({Text="Fly Speed",Flag="movement_fly_speed",Min=1,Max=150,Default=40,Rounding=1,Suffix=" studs/s",
         Callback=function(v) M.FlySpeed=v end})
@@ -1119,6 +1156,42 @@ do
             actor.Sliding=false;actor.Sprinting=false
         end)
     end
+    function M.InstallFallDamage()
+        if M.fallInstalled then return true end
+        local service=Combat.Service()
+        local replicator=service and service.Replicator
+        local inspect=(debug and debug.getupvalues) or getupvalues
+        if not replicator or type(replicator.Update)~="function" or not inspect then return false end
+        local ok,values=pcall(inspect,replicator.Update)
+        if not ok then return false end
+        local network,states
+        for _,value in pairs(values) do
+            if type(value)=="table" then
+                local found,method=pcall(function() return value.FireUnreliableServer end)
+                if found and type(method)=="function" then network=value end
+                local foundStates,result=pcall(function() return value.CharacterHeightState end)
+                if foundStates and type(result)=="table" then states=result end
+            end
+        end
+        if not network or not states or states.Standing==nil or states.Falling==nil or states.Skydiving==nil then return false end
+        local original=network.FireUnreliableServer
+        local function wrapper(self,route,uid,x,y,z,orientation,sprinting,height,...)
+            -- Preserve position and physics; only normalize the local airborne replication state.
+            if M.active and M.NoFallDamage and route=="ReplicateMovement" then
+                local current=Combat.Service()
+                local replica=current and current.Replicator
+                if replica and replica.LocalActor and uid==replica._uid
+                    and (height==states.Falling or height==states.Skydiving) then
+                    height=states.Standing
+                end
+            end
+            return original(self,route,uid,x,y,z,orientation,sprinting,height,...)
+        end
+        network.FireUnreliableServer=wrapper
+        table.insert(M.hooks,{class=network,key="FireUnreliableServer",original=original,wrapper=wrapper})
+        M.fallInstalled=true
+        return true
+    end
     function M.Destroy()
         M.active=false
         if M.sprintActor and M.sprintController then M.sprintActor.Sprinting=M.sprintController.IsSprinting end
@@ -1140,6 +1213,11 @@ do
             M.speedActive=M.Speed and speed;M.flyActive=M.Fly and fly
             M.modifierActive=M.flyActive and M.Modifier and boost
         else M.speedActive=false;M.flyActive=M.Fly and M.flyActive;M.modifierActive=false end
+        if M.NoFallDamage and not M.fallInstalled and tick()>(M.nextFallResolve or 0) then
+            M.nextFallResolve=tick()+2
+            local ok,err=pcall(M.InstallFallDamage)
+            if not ok then M.fallError=tostring(err) end
+        end
         if not M.installed and tick()> (M.nextResolve or 0) then
             M.nextResolve=tick()+2
             for _,module in ipairs(getloadedmodules()) do
@@ -1589,7 +1667,7 @@ do
     end
     toggle(GunBallistics,"Instant Bullet",Gun,"InstantBullet","gun_instant_bullet")
     slider(GunBallistics,"Bullet Speed",Gun,"BulletMultiplier","gun_bullet_multiplier",1,10,1,.1,"x")
-    GunBallistics:AddLabel({Text="Server may reject bullets"})
+    GunBallistics:AddLabel({Text="Bullets may be rejected by server."})
     toggle(GunHandling,"RPM Modifier",Gun,"RPM","gun_rpm_enabled")
     slider(GunHandling,"RPM",Gun,"RPMValue","gun_rpm_value",60,3000,900,10," RPM")
     toggle(GunHandling,"No Equip Delay",Gun,"NoEquipDelay","gun_no_equip_delay")
@@ -1612,11 +1690,12 @@ do
             for k,v in pairs(values or {}) do local name=type(k)=="number" and v or (v and k);if map[name] then selected[map[name]]=true end end
             A.Targets=selected
         end})
+    mr:AddLabel({Text="Require melee equipped"})
     local vp=MainWindow:AddTab({Text="Vehicle Mods",Pages={"Settings"}})
     local vl=vp:AddSection({Title="Driving",Side="Left"});local vr=vp:AddSection({Title="Flight",Side="Right"})
     toggle(vl,"Speed Mod",V,"Speed","vehicle_speed")
     slider(vl,"Speed",V,"SpeedValue","vehicle_speed_value",1,250,80,1," studs/s")
-    toggle(vl,"Stability Assist (Cars)",V,"Stability","vehicle_stability")
+    toggle(vl,"Stability Assist",V,"Stability","vehicle_stability")
     toggle(vl,"Heli Fast Startup",V,"FastStart","vehicle_heli_start")
     toggle(vr,"Vehicle Fly",V,"Fly","vehicle_fly")
     V.key=vr:AddKeyPicker({Text="Vehicle Fly Key",Flag="vehicle_fly_key",Default=Enum.KeyCode.V,Mode="Toggle",Callback=function() end})
@@ -3056,13 +3135,13 @@ WMWorld:AddToggle({
 wmFogStart = WMWorld:AddSlider({
     Text = "Fog Start",
     Flag = "wm_fog_start",
-    Min = 0, Max = 5000, Rounding = 0, Default = 0,
+    Min = 0, Max = 5000, Rounding = 1, Default = 0,
     Callback = function(v) WM.fog.s = v end
 })
 wmFogEnd = WMWorld:AddSlider({
     Text = "Fog End",
     Flag = "wm_fog_end",
-    Min = 0, Max = 10000, Rounding = 0, Default = 1000,
+    Min = 0, Max = 10000, Rounding = 1, Default = 1000,
     Callback = function(v) WM.fog.e = v end
 })
 wmFogColor = WMWorld:AddColorPicker({
@@ -3100,25 +3179,25 @@ WMLight:AddToggle({
 wmBrightness = WMLight:AddSlider({
     Text = "World Brightness",
     Flag = "wm_brightness",
-    Min = 0, Max = 10, Rounding = 2, Default = WM.light.brightness,
+    Min = 0, Max = 10, Rounding = .01, Default = WM.light.brightness,
     Callback = function(v) WM.light.brightness = v end
 })
 wmExposure = WMLight:AddSlider({
     Text = "Exposure Compensation",
     Flag = "wm_exposure",
-    Min = -5, Max = 5, Rounding = 2, Default = WM.light.exposure,
+    Min = -5, Max = 5, Rounding = .01, Default = WM.light.exposure,
     Callback = function(v) WM.light.exposure = v end
 })
 wmDiffuse = WMLight:AddSlider({
     Text = "Environment Diffuse",
     Flag = "wm_diffuse",
-    Min = 0, Max = 1, Rounding = 2, Default = WM.light.diffuse,
+    Min = 0, Max = 1, Rounding = .01, Default = WM.light.diffuse,
     Callback = function(v) WM.light.diffuse = v end
 })
 wmSpecular = WMLight:AddSlider({
     Text = "Environment Specular",
     Flag = "wm_specular",
-    Min = 0, Max = 1, Rounding = 2, Default = WM.light.specular,
+    Min = 0, Max = 1, Rounding = .01, Default = WM.light.specular,
     Callback = function(v) WM.light.specular = v end
 })
 wm_setVisible(wmBrightness, false)
@@ -3139,6 +3218,8 @@ WMGraphics:AddToggle({
         wm_setVisible(wmShadowSoftness, v)
         wm_setVisible(wmTechDropdown, v)
         if v then
+            WMLighting.GlobalShadows = true
+            WMLighting.ShadowSoftness = WM.shadows.softness
             pcall(function() WMLighting.Technology = Enum.Technology[WM.shadows.tech] end)
         else
             WMLighting.GlobalShadows = WMBackup.GlobalShadows
@@ -3149,8 +3230,11 @@ WMGraphics:AddToggle({
 wmShadowSoftness = WMGraphics:AddSlider({
     Text = "Shadow Softness",
     Flag = "wm_shadow_softness",
-    Min = 0, Max = 1, Rounding = 2, Default = WM.shadows.softness,
-    Callback = function(v) WM.shadows.softness = v end
+    Min = 0, Max = 1, Rounding = .01, Default = WM.shadows.softness,
+    Callback = function(v)
+        WM.shadows.softness = v
+        if WM.shadows.enabled then WMLighting.ShadowSoftness = v end
+    end
 })
 wmTechDropdown = WMGraphics:AddDropdown({
     Text = "Graphics Technology",
@@ -3390,17 +3474,8 @@ Library:Notify({
     Lifetime = 3
 })
 
--- Force the menu open.
--- The "Menu bind" keypicker fires SetVisible(false) on init, starting a fade-out
--- and locking Tweening. We wait for that to settle, clear the lock, then open.
-task.delay(1, function()
-    pcall(function()
-        MainWindow.Tweening = false
-        if MainWindow.SetVisible then
-            MainWindow.SetVisible(true)
-        end
-    end)
-end)
+-- Open through the synchronized setter without a delayed override of user input.
+MainWindow.SetVisible(true)
 
 -- Boot ESP last so any UI setup errors don't prevent the window from rendering
 task.defer(function()
