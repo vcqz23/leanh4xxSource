@@ -9,6 +9,10 @@ local previousLibrary = getgenv().LinoriaMenuLibrary
 if previousLibrary and not previousLibrary.Unloaded then previousLibrary:Unload() end
 local Library = assert(loadstring(LibrarySource, 'LinoriaLib.luau'))()
 getgenv().LinoriaMenuLibrary = Library
+local reloadState = getfenv().STATE
+if type(reloadState)=="table" and type(reloadState.onCleanup)=="function" then
+    reloadState.onCleanup(function() if not Library.Unloaded then Library:Unload() end end)
+end
 local Toggles, Options = getgenv().Toggles, getgenv().Options
 local ThemeManager = loadstring(game:HttpGet(repo .. 'addons/ThemeManager.lua'))()
 local SaveManager = loadstring(game:HttpGet(repo .. 'addons/SaveManager.lua'))()
@@ -81,7 +85,7 @@ Library.Create = function(self, class, properties)
 end
 
 local Window = Library:CreateWindow({
-    Title = 'Lean Pro Max Ultra Vip Undetected',
+    Title = 'Lean v2.6',
     Center = true,
     AutoShow = true,
     Size = UDim2.fromOffset(568, 660),
@@ -378,11 +382,12 @@ function Combat.FindTarget(settings,camera,mouse,sticky)
     end
     return best
 end
+local triggerAxes = {"X", "Y", "Z"}
 function Combat.RayBox(origin,direction,cf,size)
     local p=cf:PointToObjectSpace(origin)
     local d=cf:VectorToObjectSpace(direction)
     local half=size*.5;local lo,hi=0,math.huge
-    for _,axis in ipairs({"X","Y","Z"}) do
+    for _,axis in ipairs(triggerAxes) do
         if math.abs(d[axis])<1e-6 then if math.abs(p[axis])>half[axis] then return nil end
         else
             local a,b=(-half[axis]-p[axis])/d[axis],(half[axis]-p[axis])/d[axis]
@@ -405,13 +410,33 @@ function Combat.TriggerTarget(settings,camera,mouse)
     local closest,nearest=nil,settings.MaxDistance
     -- Test all actor bodies before applying the target filter: an excluded player
     -- in front of an NPC must block the trigger, rather than shooting through it.
+    local origin,direction=ray.Origin,ray.Direction
+    local directionLengthSquared=direction:Dot(direction)
+    if directionLengthSquared<1e-12 then return nil end
     for _,a in ipairs(Combat.actors) do
-        if Combat.IsAlive(a) and a.RootPart and a.Character and a.Character.Parent then
-            local delta=a.Position-a.RootPart.Position
-            for _,p in ipairs((Combat.parts[a] or {}).list or {}) do
+        local cached=Combat.parts[a]
+        local root=a.RootPart
+        if cached and root and a.Character and a.Character.Parent and Combat.IsAlive(a) then
+            -- Parked rigs share one actor transform; compute it once per actor.
+            local actorTransform
+            if not root:IsDescendantOf(workspace) then
+                local rotation=typeof(a.CFrame)=="CFrame" and a.CFrame.Rotation or CFrame.identity
+                actorTransform=(rotation+a.Position)*root.CFrame:Inverse()
+            end
+            for _,p in ipairs(cached.list) do
                 if p.Parent then
-                    local hit=Combat.RayBox(ray.Origin,ray.Direction,Combat.PartCFrame(a,p),p.Size)
-                    if hit and hit<nearest then nearest=hit;closest=a end
+                    local cf=p.CFrame
+                    if actorTransform then cf=actorTransform*cf end
+                    local size=p.Size
+                    -- Reject parts outside the finite ray segment using an enclosing sphere.
+                    -- The exact oriented-box test still decides every possible intersection.
+                    local offset=cf.Position-origin
+                    local along=math.clamp(offset:Dot(direction)/directionLengthSquared,0,nearest)
+                    local separation=offset-direction*along
+                    if separation:Dot(separation)<=size:Dot(size)*.25+1e-5 then
+                        local hit=Combat.RayBox(origin,direction,cf,size)
+                        if hit and hit<nearest then nearest=hit;closest=a end
+                    end
                 end
             end
         end
@@ -421,7 +446,7 @@ function Combat.TriggerTarget(settings,camera,mouse)
     return closest
 end
 function Combat.KeyActive(picker,_state)
-    return picker ~= nil and picker:GetState() == true
+    return AimUIS:GetFocusedTextBox()==nil and picker ~= nil and picker:GetState() == true
 end
 function Combat.RageActive()
     return Combat.active and Rage.Enabled and Combat.KeyActive(RageKeyPicker)
@@ -886,7 +911,7 @@ local function addSubtabs(name, pages)
             Text = page.Name, Font = Library.Font, TextSize = 14,
             AutoButtonColor = false, BackgroundColor3 = Library.BackgroundColor,
             TextColor3 = Library.FontColor, BorderSizePixel = 0,
-            Size = UDim2.fromOffset(math.max(90, Library:GetTextBounds(page.Name, Library.Font, 14) + 28), 30), LayoutOrder = index,
+            Size = UDim2.fromOffset(math.max(80, Library:GetTextBounds(page.Name, Library.Font, 14) + 20), 30), LayoutOrder = index,
             ZIndex = 4, Parent = bar,
         })
         Library:AddToRegistry(page.Button, {
@@ -1946,6 +1971,8 @@ do
     local MovementPage = legacyPage(Tabs.Movement, movementPages, "Movement")
     local FlightPage = legacyPage(Tabs.Movement, movementPages, "Flight")
     local M={active=true,hooks={},Speed=false,SpeedValue=24,Smoothing=false,Stamina=false,
+        AutoSprint=false,Strafe=false,StrafeSpeed=24,strafeWeight=0,
+        Bunnyhop=false,AutoHeal=false,HealThreshold=75,HealItems={Vitamins=true,Bandage=true,Dressing=true},nextJump=0,nextHeal=0,nextHealCheck=0,
         Penalties=false,Survival=false,NoFallDamage=false,Fly=false,FlySpeed=40,Modifier=false,Multiplier=2,Noclip=false,
         speedState={},flyState={},modifierState={}}
     Combat.Movement=M
@@ -1995,6 +2022,69 @@ do
         class[key]=wrapper
         table.insert(M.hooks,{class=class,key=key,original=original,wrapper=wrapper})
     end
+    function M.ResolveActions()
+        for _,module in ipairs(getloadedmodules()) do
+            if module.Name=="InputService" and not M.inputService then
+                local ok,value=pcall(require,module)
+                if ok and type(value)=="table" then M.inputService=value end
+            elseif module.Name=="ActionInterface" and not M.medicalInterface then
+                local ok,value=pcall(require,module)
+                if ok and type(value)=="table" and type(value._medical)=="function" and type(value._getMedical)=="function" then
+                    -- Build the game's self-treatment callbacks without changing the radial menu.
+                    local context={_getMedical=function() return 0,0,0 end}
+                    local actions
+                    context._setOptions=function(_,options)
+                        actions={Bandage=options[1][5],Vitamins=options[2][5],Dressing=options[3][5]}
+                    end
+                    local built=pcall(value._medical,context)
+                    if built and actions then M.medicalInterface=value;M.healActions=actions end
+                end
+            end
+            if M.inputService and M.medicalInterface then break end
+        end
+    end
+    function M.InputBlocked()
+        local input=M.inputService
+        return Window.Holder.Visible or AimUIS:GetFocusedTextBox()~=nil
+            or not input or input.PauseOpen or input.InventoryOpen or input.RadialOpen
+    end
+    function M.StepBunnyhop(ctrl,now)
+        if not M.Bunnyhop or M.flyActive or not ctrl._up or not ctrl.IsGrounded
+            or ctrl.IsSwimming or ctrl.IsSliding or (ctrl.VelocityGravity or 0)>0
+            or now<M.nextJump or not M.CanMove(ctrl) or M.InputBlocked() then return end
+        local mounts=M.inputService._mounts
+        local jump=mounts and mounts.Jump
+        if type(jump)~="function" then return end
+        -- The native input callback checks stance, exhaustion and the game's movement restrictions.
+        M.nextJump=now+.5
+        local ok,err=pcall(jump,true,false)
+        if not ok then M.jumpError=tostring(err) end
+    end
+    function M.StepAutoHeal(now)
+        if not M.AutoHeal or now<M.nextHealCheck then return end
+        M.nextHealCheck=now+.25
+        if now<M.nextHeal or not M.medicalInterface or M.InputBlocked() then return end
+        local service=Combat.Service()
+        local actor=service and service.Replicator and service.Replicator.LocalActor
+        if not actor or actor.Alive==false or actor.Downed or actor.Frozen or actor.Forced then return end
+        local health=actor.Health
+        local maximum=type(actor.MaxHealth)=="number" and actor.MaxHealth>0 and actor.MaxHealth or 100
+        if type(health)~="number" or health~=health or health<=0 or health>=maximum*M.HealThreshold/100 then return end
+        if type(actor.MedicalEnd)=="number" and now<actor.MedicalEnd then return end
+        local ok,bandages,dressings,vitamins=pcall(M.medicalInterface._getMedical,M.medicalInterface)
+        if not ok then M.healError=tostring(bandages);M.nextHeal=now+2;return end
+        local item
+        local selected=M.HealItems
+        local hasBandage=selected.Bandage and bandages>0
+        if selected.Vitamins and vitamins>0 and (maximum-health>=25 or not hasBandage) then item="Vitamins"
+        elseif hasBandage then item="Bandage"
+        elseif selected.Dressing and dressings>0 then item="Dressing" end
+        if not item then return end
+        -- Vitamins keep healing over time. Wait before considering another consumable.
+        M.nextHeal=now+(item=="Vitamins" and 8 or 3)
+        local used,err=pcall(M.healActions[item])
+        if not used then M.healError=tostring(err) end
+    end
     function M.Install(class)
         local standing
         -- shared.import belongs to the game's module environment, not the executor.
@@ -2019,14 +2109,29 @@ do
         end
         M.Wrap(class,"_processMovementInput",function(original,ctrl,input,dt)
             local actor=ctrl._localActor
-            if standing~=nil and (M.OmniSprint or M.SprintCombat) and M.CanMove(ctrl) and ctrl.TrySprinting
+            M.strafeController=ctrl
+            M.strafeWeight=input.Magnitude>.01 and math.clamp(math.abs(input.X)/input.Magnitude,0,1) or 0
+            local previousSprint=ctrl.TrySprinting
+            local autoSprint=M.AutoSprint and not M.flyActive and M.CanMove(ctrl)
+                and not M.InputBlocked()
+                and input.Magnitude>.01 and (M.OmniSprint or input.Y<-.5)
+            if autoSprint then ctrl.TrySprinting=true end
+            if standing~=nil and (M.OmniSprint or M.SprintCombat or autoSprint) and M.CanMove(ctrl) and ctrl.TrySprinting
                 and ctrl.HeightState==standing and not ctrl.IsSliding and not ctrl.IsSwimming
                 and not actor.CurrentState.Dragging and input.Magnitude>.01 then
                 local directionOK=M.OmniSprint or input.Y<-.5
                 local aimOK=M.SprintCombat or not actor.ADS
                 if directionOK and aimOK then ctrl.IsSprinting=true end
             end
-            return original(ctrl,input,dt)
+            local result=table.pack(pcall(original,ctrl,input,dt))
+            ctrl.TrySprinting=previousSprint
+            if not result[1] then error(result[2],0) end
+            if M.Strafe and ctrl.IsGrounded==false and not ctrl.IsSwimming and not ctrl.IsSliding
+                and not M.flyActive and M.strafeWeight>0 and M.CanMove(ctrl) and not M.InputBlocked() then
+                local targetSpeed=M.StrafeSpeed*math.clamp(input.Magnitude,0,1)
+                ctrl.MoveSpeed=ctrl.MoveSpeed+(targetSpeed-ctrl.MoveSpeed)*M.strafeWeight
+            end
+            return table.unpack(result,2,result.n)
         end)
         M.Wrap(class,"_accelerate",function(original,ctrl,dt,magnitude)
             local a=ctrl._localActor
@@ -2065,6 +2170,7 @@ do
             if M.Smoothing then ctrl._lastMovement=input end
             if not (M.flyActive and M.CanMove(ctrl)) then
                 local result=table.pack(original(ctrl,input,dt))
+                M.StepBunnyhop(ctrl,tick())
                 -- FirearmInventory checks Actor.Sprinting even inside its yielding fire loop.
                 -- Keep physical sprint speed on the controller; expose a ready weapon pose.
                 if M.SprintCombat and M.CanMove(ctrl) then
@@ -2155,6 +2261,13 @@ do
     local oldDestroy=Combat.Destroy
     Combat.Destroy=function() M.Destroy();oldDestroy() end
     M.connection=AimRunService.Heartbeat:Connect(function()
+        local now=tick()
+        if (M.Bunnyhop or M.AutoHeal or M.AutoSprint or M.Strafe) and (not M.inputService or not M.medicalInterface)
+            and now>(M.nextActionResolve or 0) then
+            M.nextActionResolve=now+2
+            M.ResolveActions()
+        end
+        M.StepAutoHeal(now)
         local focused=AimUIS:GetFocusedTextBox()~=nil
         if not focused then
             local speed=Combat.KeyActive(M.speedKey,M.speedState)
@@ -2631,7 +2744,7 @@ do
     toggle(GunVisualSection,"Gun Debug HUD",Gun,"Debug","gun_debug_hud")
     local mp=MeleePage
     local ml=mp:AddSection({Title="Melee",Side="Left"})
-    local mr=mp:AddSection({Title="Kill Aura",Side="Right"})
+    local mr=mp:AddSection({Title="Melee Aura",Side="Right"})
     toggle(ml,"Melee Force Headshot",A,"Headshot","melee_force_headshot")
     toggle(ml,"Extended Reach",A,"Reach","melee_extended_reach")
     slider(ml,"Reach Distance",A,"Distance","melee_reach_distance",0,20,8,.5," studs")
@@ -2648,7 +2761,7 @@ do
     local vl=vp:AddSection({Title="Driving",Side="Left"});local vr=vp:AddSection({Title="Flight",Side="Right"})
     toggle(vl,"Speed Mod",V,"Speed","vehicle_speed")
     slider(vl,"Speed",V,"SpeedValue","vehicle_speed_value",1,250,80,1," studs/s")
-    toggle(vl,"Stability Assist (Cars)",V,"Stability","vehicle_stability")
+    toggle(vl,"Stability Assist)",V,"Stability","vehicle_stability")
     toggle(vl,"Heli Fast Startup",V,"FastStart","vehicle_heli_start")
     toggle(vr,"Vehicle Fly",V,"Fly","vehicle_fly")
     V.key=vr:AddKeyPicker({Text="Vehicle Fly Key",Flag="vehicle_fly_key",Default=Enum.KeyCode.V,Mode="Toggle",Callback=function() end})
@@ -2990,6 +3103,359 @@ table.insert(Combat.connections,AimRunService.RenderStepped:Connect(function()
 end))
 
 
+do
+local WMLighting = game:GetService("Lighting")
+local VisualsPage = legacyPage(Tabs.Mods, modPages, 'World Mods')
+-- Track the Linoria rows belonging to each conditional control.
+local addWorldSection = VisualsPage.AddSection
+VisualsPage.AddSection = function(self, info)
+    local section = addWorldSection(self, info)
+    local group = self.Groups[#self.Groups]
+    for _, method in ipairs({ 'AddSlider', 'AddDropdown' }) do
+        local addControl = section[method]
+        section[method] = function(_, data)
+            local previous = {}
+            for _, child in ipairs(group.Container:GetChildren()) do previous[child] = true end
+            local control = addControl(section, data)
+            local rows = {}
+            for _, child in ipairs(group.Container:GetChildren()) do
+                if not previous[child] and child:IsA('GuiObject') then table.insert(rows, child) end
+            end
+            control.SetVisible = function(visible)
+                if not visible and control.CloseDropdown then control:CloseDropdown() end
+                for _, row in ipairs(rows) do row.Visible = visible end
+                group:Resize()
+            end
+            return control
+        end
+    end
+    return section
+end
+
+local function wm_setVisible(control, visible)
+    if not control then return end
+    if control.SetVisible then control.SetVisible(visible)
+    elseif control.DisplayFrame then control.DisplayFrame.Visible = visible end
+end
+
+-- Snapshot the game's original lighting so each toggle can restore on disable.
+local WMBackup = {
+    Ambient = WMLighting.Ambient, OutdoorAmbient = WMLighting.OutdoorAmbient,
+    ColorShift_Top = WMLighting.ColorShift_Top, ColorShift_Bottom = WMLighting.ColorShift_Bottom,
+    ClockTime = WMLighting.ClockTime,
+    FogStart = WMLighting.FogStart, FogEnd = WMLighting.FogEnd, FogColor = WMLighting.FogColor,
+    Brightness = WMLighting.Brightness, ExposureCompensation = WMLighting.ExposureCompensation,
+    EnvironmentDiffuseScale = WMLighting.EnvironmentDiffuseScale,
+    EnvironmentSpecularScale = WMLighting.EnvironmentSpecularScale,
+    GlobalShadows = WMLighting.GlobalShadows, ShadowSoftness = WMLighting.ShadowSoftness,
+}
+
+local WM = {
+    ambient    = { enabled = false, a = WMLighting.Ambient, b = WMLighting.OutdoorAmbient },
+    colorShift = { enabled = false, top = WMLighting.ColorShift_Top, bottom = WMLighting.ColorShift_Bottom },
+    time       = { enabled = false, value = WMLighting.ClockTime },
+    fog        = { enabled = false, s = WMLighting.FogStart, e = WMLighting.FogEnd, color = WMLighting.FogColor },
+    light      = { enabled = false, brightness = WMLighting.Brightness, exposure = WMLighting.ExposureCompensation,
+                   diffuse = WMLighting.EnvironmentDiffuseScale, specular = WMLighting.EnvironmentSpecularScale },
+    shadows    = { enabled = false, softness = WMLighting.ShadowSoftness, tech = "ShadowMap" },
+    fullbright = { enabled = false, saved = nil },
+}
+
+local fullbrightValues = {
+    Ambient = Color3.new(1, 1, 1), OutdoorAmbient = Color3.new(1, 1, 1),
+    Brightness = 2, ExposureCompensation = 0, GlobalShadows = false,
+}
+function WM.RestoreFullbright()
+    if not WM.fullbright.saved then return end
+    for property, value in pairs(WM.fullbright.saved) do WMLighting[property] = value end
+    WM.fullbright.saved = nil
+end
+
+-- Reapply enabled groups every frame so the game can't overwrite them.
+function WM.Apply()
+    if WM.ambient.enabled then
+        WMLighting.Ambient = WM.ambient.a
+        WMLighting.OutdoorAmbient = WM.ambient.b
+    end
+    if WM.colorShift.enabled then
+        WMLighting.ColorShift_Top = WM.colorShift.top
+        WMLighting.ColorShift_Bottom = WM.colorShift.bottom
+    end
+    if WM.time.enabled then
+        WMLighting.ClockTime = WM.time.value
+    end
+    if WM.fog.enabled then
+        WMLighting.FogStart = WM.fog.s
+        WMLighting.FogEnd = WM.fog.e
+        WMLighting.FogColor = WM.fog.color
+    end
+    if WM.light.enabled then
+        WMLighting.Brightness = WM.light.brightness
+        WMLighting.ExposureCompensation = WM.light.exposure
+        WMLighting.EnvironmentDiffuseScale = WM.light.diffuse
+        WMLighting.EnvironmentSpecularScale = WM.light.specular
+    end
+    if WM.shadows.enabled then
+        WMLighting.GlobalShadows = true
+        WMLighting.ShadowSoftness = WM.shadows.softness
+    end
+    if WM.fullbright.enabled then
+        for property, value in pairs(fullbrightValues) do
+            if WMLighting[property] ~= value then WMLighting[property] = value end
+        end
+    end
+end
+table.insert(Combat.connections, AimRunService.RenderStepped:Connect(WM.Apply))
+
+-- ── World ─────────────────────────────────────────────────────
+local WMWorld = VisualsPage:AddSection({ Title = "World", Side = "Left" })
+
+WMWorld:AddToggle({
+    Text = "Custom Ambient",
+    Flag = "wm_ambient",
+    Default = false,
+    Callback = function(v)
+        WM.ambient.enabled = v
+        if not v then
+            WMLighting.Ambient = WMBackup.Ambient
+            WMLighting.OutdoorAmbient = WMBackup.OutdoorAmbient
+        end
+    end
+})
+WMWorld:AddColorPicker({
+    Text = "Ambient",
+    Flag = "wm_ambient_a",
+    Default = WM.ambient.a,
+    Callback = function(c) WM.ambient.a = c end
+})
+WMWorld:AddColorPicker({
+    Text = "Outdoor Ambient",
+    Flag = "wm_ambient_b",
+    Default = WM.ambient.b,
+    Callback = function(c) WM.ambient.b = c end
+})
+
+WMWorld:AddToggle({
+    Text = "Custom Color Shift",
+    Flag = "wm_colorshift",
+    Default = false,
+    Callback = function(v)
+        WM.colorShift.enabled = v
+        if not v then
+            WMLighting.ColorShift_Top = WMBackup.ColorShift_Top
+            WMLighting.ColorShift_Bottom = WMBackup.ColorShift_Bottom
+        end
+    end
+})
+WMWorld:AddColorPicker({
+    Text = "Color Shift Top",
+    Flag = "wm_colorshift_top",
+    Default = WM.colorShift.top,
+    Callback = function(c) WM.colorShift.top = c end
+})
+WMWorld:AddColorPicker({
+    Text = "Color Shift Bottom",
+    Flag = "wm_colorshift_bottom",
+    Default = WM.colorShift.bottom,
+    Callback = function(c) WM.colorShift.bottom = c end
+})
+
+local wmTimeSlider
+WMWorld:AddToggle({
+    Text = "Custom World Time",
+    Flag = "wm_time",
+    Default = false,
+    Callback = function(v)
+        WM.time.enabled = v
+        wm_setVisible(wmTimeSlider, v)
+        if not v then WMLighting.ClockTime = WMBackup.ClockTime end
+    end
+})
+wmTimeSlider = WMWorld:AddSlider({
+    Text = "World Time",
+    Flag = "wm_time_value",
+    Min = 0, Max = 24, Rounding = 1, Default = 14,
+    Callback = function(v) WM.time.value = v end
+})
+wm_setVisible(wmTimeSlider, false)
+
+local wmFogStart, wmFogEnd, wmFogColor
+WMWorld:AddToggle({
+    Text = "Custom Fog",
+    Flag = "wm_fog",
+    Default = false,
+    Callback = function(v)
+        WM.fog.enabled = v
+        wm_setVisible(wmFogStart, v)
+        wm_setVisible(wmFogEnd, v)
+        wm_setVisible(wmFogColor, v)
+        if not v then
+            WMLighting.FogStart = WMBackup.FogStart
+            WMLighting.FogEnd = WMBackup.FogEnd
+            WMLighting.FogColor = WMBackup.FogColor
+        end
+    end
+})
+wmFogStart = WMWorld:AddSlider({
+    Text = "Fog Start",
+    Flag = "wm_fog_start",
+    Min = 0, Max = 5000, Rounding = 1, Default = 0,
+    Callback = function(v) WM.fog.s = v end
+})
+wmFogEnd = WMWorld:AddSlider({
+    Text = "Fog End",
+    Flag = "wm_fog_end",
+    Min = 0, Max = 10000, Rounding = 1, Default = 1000,
+    Callback = function(v) WM.fog.e = v end
+})
+wmFogColor = WMWorld:AddColorPicker({
+    Text = "Fog Color",
+    Flag = "wm_fog_color",
+    Default = WM.fog.color,
+    Callback = function(c) WM.fog.color = c end
+})
+wm_setVisible(wmFogStart, false)
+wm_setVisible(wmFogEnd, false)
+wm_setVisible(wmFogColor, false)
+
+-- ── Lighting ──────────────────────────────────────────────────
+local WMLight = VisualsPage:AddSection({ Title = "Lighting", Side = "Right" })
+
+WMLight:AddToggle({
+    Text = "Fullbright", Flag = "wm_fullbright", Default = false,
+    Callback = function(enabled)
+        if WM.fullbright.enabled == enabled then return end
+        if enabled then
+            local saved = {}
+            for property in pairs(fullbrightValues) do saved[property] = WMLighting[property] end
+            WM.fullbright.saved = saved
+        else
+            WM.RestoreFullbright()
+        end
+        WM.fullbright.enabled = enabled
+        WM.Apply()
+    end,
+})
+
+local wmBrightness, wmExposure, wmDiffuse, wmSpecular
+WMLight:AddToggle({
+    Text = "Custom Lighting",
+    Flag = "wm_light",
+    Default = false,
+    Callback = function(v)
+        WM.light.enabled = v
+        wm_setVisible(wmBrightness, v)
+        wm_setVisible(wmExposure, v)
+        wm_setVisible(wmDiffuse, v)
+        wm_setVisible(wmSpecular, v)
+        if not v then
+            WMLighting.Brightness = WMBackup.Brightness
+            WMLighting.ExposureCompensation = WMBackup.ExposureCompensation
+            WMLighting.EnvironmentDiffuseScale = WMBackup.EnvironmentDiffuseScale
+            WMLighting.EnvironmentSpecularScale = WMBackup.EnvironmentSpecularScale
+        end
+    end
+})
+wmBrightness = WMLight:AddSlider({
+    Text = "World Brightness",
+    Flag = "wm_brightness",
+    Min = 0, Max = 10, Rounding = .01, Default = WM.light.brightness,
+    Callback = function(v) WM.light.brightness = v end
+})
+wmExposure = WMLight:AddSlider({
+    Text = "Exposure Compensation",
+    Flag = "wm_exposure",
+    Min = -5, Max = 5, Rounding = .01, Default = WM.light.exposure,
+    Callback = function(v) WM.light.exposure = v end
+})
+wmDiffuse = WMLight:AddSlider({
+    Text = "Environment Diffuse",
+    Flag = "wm_diffuse",
+    Min = 0, Max = 1, Rounding = .01, Default = WM.light.diffuse,
+    Callback = function(v) WM.light.diffuse = v end
+})
+wmSpecular = WMLight:AddSlider({
+    Text = "Environment Specular",
+    Flag = "wm_specular",
+    Min = 0, Max = 1, Rounding = .01, Default = WM.light.specular,
+    Callback = function(v) WM.light.specular = v end
+})
+wm_setVisible(wmBrightness, false)
+wm_setVisible(wmExposure, false)
+wm_setVisible(wmDiffuse, false)
+wm_setVisible(wmSpecular, false)
+
+-- ── Graphics ──────────────────────────────────────────────────
+local WMGraphics = VisualsPage:AddSection({ Title = "Graphics", Side = "Right" })
+
+local wmShadowSoftness, wmTechDropdown
+WMGraphics:AddToggle({
+    Text = "Global Shadows",
+    Flag = "wm_shadows",
+    Default = false,
+    Callback = function(v)
+        WM.shadows.enabled = v
+        wm_setVisible(wmShadowSoftness, v)
+        wm_setVisible(wmTechDropdown, v)
+        if v then
+            WMLighting.GlobalShadows = true
+            WMLighting.ShadowSoftness = WM.shadows.softness
+            pcall(function() WMLighting.Technology = Enum.Technology[WM.shadows.tech] end)
+        else
+            WMLighting.GlobalShadows = WMBackup.GlobalShadows
+            WMLighting.ShadowSoftness = WMBackup.ShadowSoftness
+        end
+    end
+})
+wmShadowSoftness = WMGraphics:AddSlider({
+    Text = "Shadow Softness",
+    Flag = "wm_shadow_softness",
+    Min = 0, Max = 1, Rounding = .01, Default = WM.shadows.softness,
+    Callback = function(v)
+        WM.shadows.softness = v
+        if WM.shadows.enabled then WMLighting.ShadowSoftness = v end
+    end
+})
+wmTechDropdown = WMGraphics:AddDropdown({
+    Text = "Graphics Technology",
+    Flag = "wm_tech",
+    Options = {"ShadowMap", "Unified", "Future", "Voxel", "Compatibility"},
+    Default = "ShadowMap",
+    Callback = function(v)
+        WM.shadows.tech = v
+        if WM.shadows.enabled then
+            pcall(function() WMLighting.Technology = Enum.Technology[v] end)
+        end
+    end
+})
+wm_setVisible(wmShadowSoftness, false)
+wm_setVisible(wmTechDropdown, false)
+
+
+Combat.World = WM
+local destroyBeforeWorld = Combat.Destroy
+Combat.Destroy = function()
+    WM.fullbright.enabled = false
+    WM.RestoreFullbright()
+    local groups = {
+        ambient = { 'Ambient', 'OutdoorAmbient' },
+        colorShift = { 'ColorShift_Top', 'ColorShift_Bottom' },
+        time = { 'ClockTime' },
+        fog = { 'FogStart', 'FogEnd', 'FogColor' },
+        light = { 'Brightness', 'ExposureCompensation', 'EnvironmentDiffuseScale', 'EnvironmentSpecularScale' },
+        shadows = { 'GlobalShadows', 'ShadowSoftness' },
+    }
+    for name, properties in pairs(groups) do
+        if WM[name].enabled then
+            WM[name].enabled = false
+            for _, property in ipairs(properties) do WMLighting[property] = WMBackup[property] end
+        end
+    end
+    destroyBeforeWorld()
+end
+
+end
+
 addSubtabs('Movement', movementPages)
 addSubtabs('Mods', modPages)
 end
@@ -3015,7 +3481,7 @@ local WatermarkConnection = game:GetService('RunService').RenderStepped:Connect(
     end;
 
     local stats: any = game:GetService('Stats')
-    Library:SetWatermark(('Lean V2.5 | %d fps | %d ms'):format(
+    Library:SetWatermark(('Lean  | %d fps | %d ms'):format(
         math.floor(FPS),
         math.floor(stats.Network.ServerStatsItem['Data Ping']:GetValue())
     ));
