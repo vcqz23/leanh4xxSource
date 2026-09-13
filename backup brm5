@@ -3477,7 +3477,7 @@ local WatermarkConnection = game:GetService('RunService').RenderStepped:Connect(
     end;
 
     local stats: any = game:GetService('Stats')
-    Library:SetWatermark(('Linoria | %d fps | %d ms'):format(
+    Library:SetWatermark(('Lean | %d fps | %d ms'):format(
         math.floor(FPS),
         math.floor(stats.Network.ServerStatsItem['Data Ping']:GetValue())
     ));
