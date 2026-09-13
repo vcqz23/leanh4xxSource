@@ -1,8 +1,6 @@
--- Linoria menu with the BRM5 combat modules.
 
 local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
 
--- Keep the modified library in the executor workspace, or set its published URL here.
 local LibrarySourceUrl = 'https://raw.githubusercontent.com/vcqz23/settings/refs/heads/main/Linoria%20Src'
 local LibrarySource = LibrarySourceUrl ~= '' and game:HttpGet(LibrarySourceUrl) or readfile('LinoriaLib.luau')
 local previousLibrary = getgenv().LinoriaMenuLibrary
@@ -17,14 +15,12 @@ local Toggles, Options = getgenv().Toggles, getgenv().Options
 local ThemeManager = loadstring(game:HttpGet(repo .. 'addons/ThemeManager.lua'))()
 local SaveManager = loadstring(game:HttpGet(repo .. 'addons/SaveManager.lua'))()
 
--- Keep the clean palette available in the existing theme selector.
 ThemeManager.BuiltInThemes.Clean = { 0, {
     FontColor = 'E0E0E0', MainColor = '191919', BackgroundColor = '121212',
     AccentColor = 'BEBEBE', OutlineColor = '313131'
 } }
 ThemeManager.DefaultTheme = 'Clean'
 
--- Custom font assets are cached in the executor workspace.
 local Fonts: {[string]: any} = {
     UIName = 'Code', Face = Font.fromEnum(Library.Font), Cache = {}, Version = 0,
     Names = { 'Code', 'Arial', 'Gotham', 'Source Sans', 'Roboto Mono', 'Ubuntu', 'Tahoma', 'Minecraftia', 'Verdana', 'Proggy Clean' },
@@ -284,7 +280,7 @@ end
 local combatRayParams=RaycastParams.new()
 combatRayParams.FilterType=Enum.RaycastFilterType.Exclude
 combatRayParams.IgnoreWater=false
--- Match the collision group used by this game's projectile raycasts.
+-- Match the collision group used by brm5 game projectile raycast
 pcall(function() combatRayParams.CollisionGroup="9" end)
 function Combat.Visible(actor,point,camera)
     local c=Combat.Service();local me=c and c.Replicator and c.Replicator.LocalActor
@@ -340,7 +336,6 @@ function Combat.PickPart(actor,settings,camera,mouse)
     if valid(actor.RootPart) then return actor.RootPart end
 end
 function Combat.Predict(actor,part,settings,camera)
-    -- Screen selection uses the current position; shot prediction uses muzzle speed.
     return Combat.PartPosition(actor,part)
 end
 function Combat.FindTarget(settings,camera,mouse,sticky)
@@ -2748,7 +2743,7 @@ do
     toggle(ml,"Melee Force Headshot",A,"Headshot","melee_force_headshot")
     toggle(ml,"Extended Reach",A,"Reach","melee_extended_reach")
     slider(ml,"Reach Distance",A,"Distance","melee_reach_distance",0,20,8,.5," studs")
-    toggle(mr,"Kill Aura",A,"Aura","melee_kill_aura")
+    toggle(mr,"Melee Aura",A,"Aura","melee_kill_aura")
     A.key=mr:AddKeyPicker({Text="Kill Aura Key",Flag="melee_aura_key",Default=Enum.KeyCode.K,Mode="Toggle",Callback=function() end})
     mr:AddDropdown({Text="Targets",Flag="melee_aura_targets",Options={"Zombie","NPC","Player"},Default={"Zombie","NPC"},Multi=true,
         Callback=function(values)
