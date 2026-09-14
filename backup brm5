@@ -3,10 +3,35 @@ local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main
 
 local LibrarySourceUrl = 'https://raw.githubusercontent.com/vcqz23/settings/refs/heads/main/Linoria%20Src'
 local LibrarySource = LibrarySourceUrl ~= '' and game:HttpGet(LibrarySourceUrl) or readfile('LinoriaLib.luau')
+
+
 local previousLibrary = getgenv().LinoriaMenuLibrary
 if previousLibrary and not previousLibrary.Unloaded then previousLibrary:Unload() end
 local Library = assert(loadstring(LibrarySource, 'LinoriaLib.luau'))()
 getgenv().LinoriaMenuLibrary = Library
+do
+    local InputService=game:GetService("UserInputService")
+function Library:IsTyping()
+    if InputService:GetFocusedTextBox() or self.FocusedTextBox or os.clock() < (self.TypingUntil or 0) then return true end
+    local ok, focused = pcall(function()
+        return game:GetService("TextChatService").ChatInputBarConfiguration.IsFocused
+    end)
+    return ok and focused == true
+end
+table.insert(Library.Signals, InputService.TextBoxFocused:Connect(function(box)
+    Library.FocusedTextBox = box
+end))
+table.insert(Library.Signals, InputService.TextBoxFocusReleased:Connect(function(box)
+    if Library.FocusedTextBox == box then Library.FocusedTextBox = nil end
+    Library.TypingUntil = os.clock() + .15
+end))
+
+    local originalToggle=Library.Toggle
+    Library.Toggle=function(...)
+        if Library:IsTyping() then return end
+        return originalToggle(...)
+    end
+end
 local reloadState = getfenv().STATE
 if type(reloadState)=="table" and type(reloadState.onCleanup)=="function" then
     reloadState.onCleanup(function() if not Library.Unloaded then Library:Unload() end end)
@@ -81,7 +106,7 @@ Library.Create = function(self, class, properties)
 end
 
 local Window = Library:CreateWindow({
-    Title = 'Lean v2.7 | BRM5 ',
+    Title = 'Lean v2.8 | BRM5 ',
     Center = true,
     AutoShow = true,
     Size = UDim2.fromOffset(568, 660),
@@ -442,7 +467,7 @@ function Combat.TriggerTarget(settings,camera,mouse)
     return closest
 end
 function Combat.KeyActive(picker,_state)
-    return AimUIS:GetFocusedTextBox()==nil and picker ~= nil and picker:GetState() == true
+    return not Library:IsTyping() and picker ~= nil and picker:GetState() == true
 end
 function Combat.RageActive()
     return Combat.active and Rage.Enabled and Combat.KeyActive(RageKeyPicker)
@@ -470,7 +495,7 @@ function Combat.Frame()
         Combat.Install()
     end
     local menuOpen=Window.Holder.Visible
-    local blocked=menuOpen or AimUIS:GetFocusedTextBox()~=nil
+    local blocked=menuOpen or Library:IsTyping()
     Combat.silentActive=Combat.KeyActive(SilentKeyPicker,keyStates.silent)
     local triggerActive=Combat.KeyActive(TriggerKeyPicker,keyStates.trigger)
     if Combat.RageActive() then
@@ -589,7 +614,7 @@ function Combat.Install()
         -- An actual firearm discharge is already a game-accepted shot. UI menu
         -- visibility must not cancel its aim correction; typing still blocks it.
         if Combat.active and settings.Enabled and (rageActive or Combat.silentActive) and weapon._actor==me
-            and not AimUIS:GetFocusedTextBox()
+            and not Library:IsTyping()
             and math.random(1,100)<=(settings.HitChance or 100) then
             selected=Combat.FindTarget(settings,nil,nil,Combat.sticky)
         end
@@ -2048,7 +2073,7 @@ do
     end
     function M.InputBlocked()
         local input=M.inputService
-        return Window.Holder.Visible or AimUIS:GetFocusedTextBox()~=nil
+        return Window.Holder.Visible or Library:IsTyping()
             or not input or input.PauseOpen or input.InventoryOpen or input.RadialOpen
     end
     function M.ShouldAvoidHeal(actor)
@@ -2180,7 +2205,7 @@ do
             local position=ctrl._position
             if ctrl._groundHitbox then position=ctrl._groundHitbox.CFrame:PointToWorldSpace(position) end
             local direction=Vector3.zero
-            if not AimUIS:GetFocusedTextBox() then
+            if not Library:IsTyping() then
                 local function down(key) return AimUIS:IsKeyDown(key) and 1 or 0 end
                 direction=camera.CFrame.LookVector*(down(Enum.KeyCode.W)-down(Enum.KeyCode.S))
                     +camera.CFrame.RightVector*(down(Enum.KeyCode.D)-down(Enum.KeyCode.A))
@@ -2264,7 +2289,7 @@ do
             M.ResolveActions()
         end
         M.StepAutoHeal(now)
-        local focused=AimUIS:GetFocusedTextBox()~=nil
+        local focused=Library:IsTyping()
         if not focused then
             local speed=Combat.KeyActive(M.speedKey,M.speedState)
             local fly=Combat.KeyActive(M.flyKey,M.flyState)
@@ -2690,7 +2715,7 @@ GunTracerSection:AddSlider({Text="Width",Flag="gun_tracer_width",Min=.02,Max=.3,
 -- BRM5 adapters verified against place version 10120.
 do
     local X: {[string]: any}={classes={},nextScan=0,shots=setmetatable({},{__mode="k"}),saved={},active=true}
-    local V: {[string]: any}={Speed=false,SpeedValue=80,Stability=false,FastStart=false,Fly=false,FlySpeed=60,Noclip=false,keyState={}}
+    local V: {[string]: any}={Speed=false,SpeedValue=80,Stability=false,FastStart=false,Fly=false,FlySpeed=60,Noclip=false,Bounce=false,bounceStates=setmetatable({},{__mode="k"}),keyState={}}
     local T={RPM=false,RPMValue=900,NoSpread=false,NoRecoil=false}
     local A: {[string]: any}={Headshot=false,Reach=false,Distance=8,Aura=false,Targets={Zombies=true,NPCs=true},keyState={},nextSwing=0,nextTargetScan=0}
     Combat.Extensions=X;Combat.Vehicle=V;Combat.Turret=T;Combat.Melee=A
@@ -2757,7 +2782,8 @@ do
     local vl=vp:AddSection({Title="Driving",Side="Left"});local vr=vp:AddSection({Title="Flight",Side="Right"})
     toggle(vl,"Speed Mod",V,"Speed","vehicle_speed")
     slider(vl,"Speed",V,"SpeedValue","vehicle_speed_value",1,250,80,1," studs/s")
-    toggle(vl,"Stability Assist (Cars)",V,"Stability","vehicle_stability")
+    toggle(vl,"Stability Assist",V,"Stability","vehicle_stability")
+    toggle(vl,"Bounce Mode",V,"Bounce","vehicle_bounce")
     toggle(vl,"Heli Fast Startup",V,"FastStart","vehicle_heli_start")
     toggle(vr,"Vehicle Fly",V,"Fly","vehicle_fly")
     V.key=vr:AddKeyPicker({Text="Vehicle Fly Key",Flag="vehicle_fly_key",Default=Enum.KeyCode.V,Mode="Toggle",Callback=function() end})
@@ -2967,7 +2993,7 @@ do
     end
     local function direction()
         local cam=workspace.CurrentCamera
-        if not cam or AimUIS:GetFocusedTextBox() then return Vector3.zero end
+        if not cam or Library:IsTyping() then return Vector3.zero end
         local function down(k) return AimUIS:IsKeyDown(k) and 1 or 0 end
         local d=cam.CFrame.LookVector*(down(Enum.KeyCode.W)-down(Enum.KeyCode.S))+cam.CFrame.RightVector*(down(Enum.KeyCode.D)-down(Enum.KeyCode.A))
             +Vector3.yAxis*(down(Enum.KeyCode.Space)-down(Enum.KeyCode.LeftControl))
@@ -3015,12 +3041,53 @@ do
                 local correction=cf.UpVector:Cross(Vector3.yAxis)*math.clamp(dt*4,0,.4)
                 physics:SetState(nil,velocity,cf:VectorToWorldSpace(Vector3.new(localAV.X*decay,localAV.Y,localAV.Z*decay))+correction)
             end
+            local bounce=V.bounceStates[solver]
+            if V.Bounce and not bounce then
+                bounce={phase=0,blend=0,wheels=setmetatable({},{__mode="k"})}
+                V.bounceStates[solver]=bounce
+            end
+            local bounceApplied=false
+            if bounce then
+                local grounded=0
+                for _,suspension in pairs(solver._suspensions or {}) do
+                    if suspension:IsOnGround() then grounded+=1 end
+                end
+                local eligible=not heli and vehicle.Wheels and not V.flyActive and not V.Noclip
+                    and grounded>=2 and cf.UpVector.Y>.85 and math.abs(velocity.Y)<4
+                local step=math.clamp(dt,0,.1)
+                bounce.phase=(bounce.phase+step*math.pi*2/1.9)%(math.pi*2)
+                local target=(V.Bounce and eligible) and 1 or 0
+                bounce.blend+=(target-bounce.blend)*(1-math.exp(-step*3))
+                -- Vary compression and rebound timing while the native springs move the body.
+                local wave=math.sin(bounce.phase+.22*math.sin(bounce.phase))
+                if eligible and bounce.blend>.001 then
+                    for _,suspension in pairs(solver._suspensions or {}) do
+                        local params=suspension.Params
+                        if params and type(params.Length)=="number" and params.Length>0 then
+                            local entry=bounce.wheels[suspension]
+                            if not entry or entry.original~=params then
+                                entry={original=params,adjusted=setmetatable({},{__index=params})}
+                                bounce.wheels[suspension]=entry
+                            end
+                            entry.adjusted.Length=params.Length+wave*math.min(.20,params.Length*.135)*bounce.blend
+                            suspension.Params=entry.adjusted
+                            bounceApplied=true
+                        end
+                    end
+                end
+                if not V.Bounce and bounce.blend<=.001 then V.bounceStates[solver]=nil end
+            end
             local old=physics.CollisionCastParams
             if V.Noclip then
                 if not X.emptyCast then X.emptyCast=RaycastParams.new();X.emptyCast.FilterType=Enum.RaycastFilterType.Include;X.emptyCast.FilterDescendantsInstances={} end
                 physics.CollisionCastParams=X.emptyCast
             end
             local r=table.pack(pcall(original,solver,dt,inputs,...));physics.CollisionCastParams=old
+            if bounceApplied then
+                for suspension,entry in pairs(bounce.wheels) do
+                    if suspension.Params==entry.adjusted then suspension.Params=entry.original end
+                end
+            end
             if not r[1] then error(r[2],0) end
             return table.unpack(r,2,r.n)
         end end)
@@ -3146,7 +3213,7 @@ local WMBackup = {
     GlobalShadows = WMLighting.GlobalShadows, ShadowSoftness = WMLighting.ShadowSoftness,
 }
 
-local WM = {
+local WM: {[string]: any} = {
     ambient    = { enabled = false, a = WMLighting.Ambient, b = WMLighting.OutdoorAmbient },
     colorShift = { enabled = false, top = WMLighting.ColorShift_Top, bottom = WMLighting.ColorShift_Bottom },
     time       = { enabled = false, value = WMLighting.ClockTime },
@@ -3156,6 +3223,120 @@ local WM = {
     shadows    = { enabled = false, softness = WMLighting.ShadowSoftness, tech = "ShadowMap" },
     fullbright = { enabled = false, saved = nil },
 }
+
+
+local Booster={enabled=false,records={},seen={},queue={},cursor=1,restoring=false}
+WM.Booster=Booster
+function Booster.Save(object,property,value)
+    local record=Booster.seen[object]
+    if not record then
+        record={object=object,values={}}
+        Booster.seen[object]=record
+        table.insert(Booster.records,record)
+    end
+    if record.values[property]==nil then
+        local ok,old=pcall(function() return object[property] end)
+        if not ok or old==value then return end
+        record.values[property]=old
+    end
+    pcall(function() object[property]=value end)
+end
+function Booster.Process(object)
+    if object:IsA("BasePart") then
+        Booster.Save(object,"Material",Enum.Material.SmoothPlastic)
+        Booster.Save(object,"Reflectance",0)
+        Booster.Save(object,"CastShadow",false)
+        if object:IsA("MeshPart") then Booster.Save(object,"TextureID","") end
+    elseif object:IsA("Decal") or object:IsA("Texture") then
+        Booster.Save(object,"Transparency",1)
+    elseif object:IsA("SpecialMesh") then
+        Booster.Save(object,"TextureId","")
+    elseif object:IsA("SurfaceAppearance") then
+        Booster.Save(object,"Parent",nil)
+    elseif object:IsA("ParticleEmitter") or object:IsA("Trail") or object:IsA("Beam")
+        or object:IsA("Smoke") or object:IsA("Fire") or object:IsA("Sparkles") or object:IsA("PostEffect") then
+        Booster.Save(object,"Enabled",false)
+    elseif object:IsA("Light") then
+        Booster.Save(object,"Shadows",false)
+    end
+end
+function Booster.Scan()
+    Booster.queue=workspace:GetDescendants()
+    for _,object in ipairs(WMLighting:GetDescendants()) do table.insert(Booster.queue,object) end
+    Booster.cursor=1
+    Booster.Save(workspace.Terrain,"WaterWaveSize",0)
+    Booster.Save(workspace.Terrain,"WaterWaveSpeed",0)
+    Booster.Save(workspace.Terrain,"WaterReflectance",0)
+    Booster.Save(workspace.Terrain,"WaterTransparency",1)
+end
+function Booster.SetEnabled(enabled)
+    if enabled==Booster.enabled then return end
+    Booster.enabled=enabled
+    if not enabled then
+        Booster.restoring=true
+        WMLighting.GlobalShadows=WMBackup.GlobalShadows
+        WMLighting.FogStart=WMBackup.FogStart;WMLighting.FogEnd=WMBackup.FogEnd
+        table.clear(Booster.queue);Booster.cursor=1
+    elseif not Booster.restoring then Booster.Scan() end
+    WM.SyncAtmosphere()
+    WM.Apply()
+end
+function Booster.RestoreOne()
+    local record=table.remove(Booster.records)
+    if not record then return false end
+    for property,value in pairs(record.values) do
+        pcall(function() record.object[property]=value end)
+    end
+    Booster.seen[record.object]=nil
+    return true
+end
+function Booster.Step()
+    local deadline=os.clock()+.002
+    for _=1,120 do
+        if Booster.restoring then
+            if not Booster.RestoreOne() then
+                Booster.restoring=false
+                if Booster.enabled then Booster.Scan() end
+                break
+            end
+        elseif Booster.enabled then
+            local object=Booster.queue[Booster.cursor]
+            if not object then table.clear(Booster.queue);Booster.cursor=1;break end
+            Booster.queue[Booster.cursor]=false;Booster.cursor+=1
+            if object.Parent then Booster.Process(object) end
+        else break end
+        if os.clock()>=deadline then break end
+    end
+end
+local function queueVisual(object)
+    if Booster.enabled and not Booster.restoring then table.insert(Booster.queue,object) end
+end
+table.insert(Combat.connections,workspace.DescendantAdded:Connect(queueVisual))
+table.insert(Combat.connections,WMLighting.DescendantAdded:Connect(queueVisual))
+table.insert(Combat.connections,AimRunService.Heartbeat:Connect(Booster.Step))
+WM.atmospheres={}
+function WM.SyncAtmosphere()
+    if WM.fog.enabled or Booster.enabled then
+        for _,object in ipairs(WMLighting:GetChildren()) do
+            if object:IsA("Atmosphere") then
+                WM.atmospheres[object]=WMLighting
+                object.Parent=nil
+            end
+        end
+    else
+        for object,parent in pairs(WM.atmospheres) do
+            pcall(function() if object.Parent==nil then object.Parent=parent end end)
+            WM.atmospheres[object]=nil
+        end
+    end
+end
+table.insert(Combat.connections,WMLighting.ChildAdded:Connect(function(object)
+    if object:IsA("Atmosphere") and (WM.fog.enabled or Booster.enabled) then
+        task.defer(function()
+            if Combat.active then WM.SyncAtmosphere() end
+        end)
+    end
+end))
 
 local fullbrightValues = {
     Ambient = Color3.new(1, 1, 1), OutdoorAmbient = Color3.new(1, 1, 1),
@@ -3181,8 +3362,8 @@ function WM.Apply()
         WMLighting.ClockTime = WM.time.value
     end
     if WM.fog.enabled then
-        WMLighting.FogStart = WM.fog.s
-        WMLighting.FogEnd = WM.fog.e
+        WMLighting.FogStart = math.max(0,math.min(WM.fog.s,WM.fog.e-1))
+        WMLighting.FogEnd = math.max(1,WM.fog.e)
         WMLighting.FogColor = WM.fog.color
     end
     if WM.light.enabled then
@@ -3200,11 +3381,17 @@ function WM.Apply()
             if WMLighting[property] ~= value then WMLighting[property] = value end
         end
     end
+    if Booster.enabled then
+        WMLighting.GlobalShadows=false
+        WMLighting.FogStart=1000000
+        WMLighting.FogEnd=1000000
+    end
 end
 table.insert(Combat.connections, AimRunService.RenderStepped:Connect(WM.Apply))
 
 -- ── World ─────────────────────────────────────────────────────
 local WMWorld = VisualsPage:AddSection({ Title = "World", Side = "Left" })
+WMWorld:AddToggle({Text="FPS Booster",Flag="wm_fps_booster",Default=false,Callback=Booster.SetEnabled})
 
 WMWorld:AddToggle({
     Text = "Custom Ambient",
@@ -3282,6 +3469,7 @@ WMWorld:AddToggle({
     Default = false,
     Callback = function(v)
         WM.fog.enabled = v
+        WM.SyncAtmosphere()
         wm_setVisible(wmFogStart, v)
         wm_setVisible(wmFogEnd, v)
         wm_setVisible(wmFogColor, v)
@@ -3296,13 +3484,13 @@ wmFogStart = WMWorld:AddSlider({
     Text = "Fog Start",
     Flag = "wm_fog_start",
     Min = 0, Max = 5000, Rounding = 1, Default = 0,
-    Callback = function(v) WM.fog.s = v end
+    Callback = function(v) WM.fog.s = v;WM.Apply() end
 })
 wmFogEnd = WMWorld:AddSlider({
     Text = "Fog End",
     Flag = "wm_fog_end",
     Min = 0, Max = 10000, Rounding = 1, Default = 1000,
-    Callback = function(v) WM.fog.e = v end
+    Callback = function(v) WM.fog.e = v;WM.Apply() end
 })
 wmFogColor = WMWorld:AddColorPicker({
     Text = "Fog Color",
@@ -3431,8 +3619,16 @@ wm_setVisible(wmTechDropdown, false)
 Combat.World = WM
 local destroyBeforeWorld = Combat.Destroy
 Combat.Destroy = function()
+    Booster.enabled=false
+    while Booster.RestoreOne() do end
+    Booster.restoring=false
+    WM.fog.enabled=false
+    WM.SyncAtmosphere()
+    WMLighting.FogStart=WMBackup.FogStart
+    WMLighting.FogEnd=WMBackup.FogEnd
     WM.fullbright.enabled = false
     WM.RestoreFullbright()
+    WMLighting.GlobalShadows=WMBackup.GlobalShadows
     local groups = {
         ambient = { 'Ambient', 'OutdoorAmbient' },
         colorShift = { 'ColorShift_Top', 'ColorShift_Bottom' },
@@ -3543,6 +3739,21 @@ ThemeManager:ApplyToTab(Tabs['UI Settings'])
 
 -- You can use SaveManager:LoadAutoloadConfig() to load a config
 -- which has been marked to be one that auto loads!
+for _,picker in pairs(Options) do
+    if picker.Type=="KeyPicker" then
+        local getState=picker.GetState
+        picker.GetState=function(self)
+            return not Library:IsTyping() and getState(self)
+        end
+        if picker.DoClick then
+            local click=picker.DoClick
+            picker.DoClick=function(self,...)
+                if Library:IsTyping() then self.Toggled=not self.Toggled;return end
+                return click(self,...)
+            end
+        end
+    end
+end
 SaveManager:LoadAutoloadConfig()
 -- Migrate the previous mouse defaults when loading an older configuration.
 for id, key in pairs({ silent_key = 'Q', trigger_key = 'E', rage_key = 'R' }) do
