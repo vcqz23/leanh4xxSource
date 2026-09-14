@@ -1,9 +1,7 @@
-
 local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
 
 local LibrarySourceUrl = 'https://raw.githubusercontent.com/vcqz23/settings/refs/heads/main/Linoria%20Src'
 local LibrarySource = LibrarySourceUrl ~= '' and game:HttpGet(LibrarySourceUrl) or readfile('LinoriaLib.luau')
-
 
 local previousLibrary = getgenv().LinoriaMenuLibrary
 if previousLibrary and not previousLibrary.Unloaded then previousLibrary:Unload() end
@@ -106,7 +104,7 @@ Library.Create = function(self, class, properties)
 end
 
 local Window = Library:CreateWindow({
-    Title = 'Lean v2.8 | BRM5 ',
+    Title = 'Lean v2.7 | BRM5 ',
     Center = true,
     AutoShow = true,
     Size = UDim2.fromOffset(568, 660),
@@ -1521,6 +1519,111 @@ local NpcPage = visualPage('NPCs')
 local PlayersPage = visualPage('Players')
 local ZombiePage = visualPage('Zombies')
 local CorpsePage = visualPage('Corpses')
+local CrosshairPage = visualPage('Crosshair')
+local CrosshairGroup = Tabs.Visuals:AddLeftGroupbox('Crosshair')
+table.insert(CrosshairPage.Groups, CrosshairGroup)
+local Crosshair = {
+    Enabled=false, Color=Color3.new(1,1,1), Style="Static", Speed=1,
+    FollowTarget=false, Length=10, Gap=4, Thickness=1, Segments=4,
+    Outline=true, OutlineColor=Color3.new(0,0,0),
+    CenterDot=false, DotColor=Color3.new(1,1,1), Phase=0
+}
+Combat.Crosshair=Crosshair
+local CrosshairTargetSettings=setmetatable({FOVEnabled=true},{__index=Silent})
+CrosshairGroup:AddToggle('crosshair_enabled',{Text='Enabled',Default=false})
+Toggles.crosshair_enabled:OnChanged(function(v) Crosshair.Enabled=v end)
+Toggles.crosshair_enabled:AddColorPicker('crosshair_color',{Title='Color',Default=Crosshair.Color})
+Options.crosshair_color:OnChanged(function(v) Crosshair.Color=v end)
+CrosshairGroup:AddDropdown('crosshair_style',{Text='Style',Values={'Static','Spin'},Default='Static'})
+local CrosshairSpeed=CrosshairGroup:AddDependencyBox()
+CrosshairSpeed:AddSlider('crosshair_speed',{Text='Speed',Min=.1,Max=5,Default=1,Rounding=1,Suffix=' rev/s'})
+Options.crosshair_speed:OnChanged(function(v) Crosshair.Speed=v end)
+local CrosshairSpinDependency={Type='Toggle',Value=false}
+CrosshairSpeed:SetupDependencies({{CrosshairSpinDependency,true}})
+Options.crosshair_style:OnChanged(function(v)
+    Crosshair.Style=v
+    CrosshairSpinDependency.Value=v=='Spin'
+    CrosshairSpeed:Update()
+end)
+CrosshairGroup:AddToggle('crosshair_follow',{Text='Follow Target',Default=false})
+Toggles.crosshair_follow:OnChanged(function(v) Crosshair.FollowTarget=v end)
+for _,info in ipairs({
+    {'length','Length',1,40,10}, {'gap','Gap',0,30,4},
+    {'thickness','Thickness',1,8,1}, {'segments','Segments',1,8,4}
+}) do
+    local key=info[2]
+    CrosshairGroup:AddSlider('crosshair_'..info[1],{
+        Text=key,Min=info[3],Max=info[4],Default=info[5],Rounding=0,
+        Suffix=key=='Segments' and '' or 'px'
+    })
+    Options['crosshair_'..info[1]]:OnChanged(function(v) Crosshair[key]=v end)
+end
+CrosshairGroup:AddToggle('crosshair_outline',{Text='Outline',Default=true})
+Toggles.crosshair_outline:OnChanged(function(v) Crosshair.Outline=v end)
+Toggles.crosshair_outline:AddColorPicker('crosshair_outline_color',{Title='Outline Color',Default=Crosshair.OutlineColor})
+Options.crosshair_outline_color:OnChanged(function(v) Crosshair.OutlineColor=v end)
+CrosshairGroup:AddToggle('crosshair_dot',{Text='Center Dot',Default=false})
+Toggles.crosshair_dot:OnChanged(function(v) Crosshair.CenterDot=v end)
+Toggles.crosshair_dot:AddColorPicker('crosshair_dot_color',{Title='Center Dot Color',Default=Crosshair.DotColor})
+Options.crosshair_dot_color:OnChanged(function(v) Crosshair.DotColor=v end)
+local CrosshairLines,CrosshairOutlines={},{}
+local function crosshairDrawing(class,z)
+    local d=Drawing.new(class)
+    d.Visible=false;d.Transparency=1;d.ZIndex=z
+    table.insert(Combat.drawings,d)
+    return d
+end
+for i=1,8 do
+    CrosshairOutlines[i]=crosshairDrawing('Line',19)
+    CrosshairLines[i]=crosshairDrawing('Line',20)
+end
+local CrosshairDotOutline=crosshairDrawing('Circle',21)
+local CrosshairDot=crosshairDrawing('Circle',22)
+CrosshairDotOutline.Filled=true;CrosshairDot.Filled=true
+table.insert(Combat.connections,AimRunService.RenderStepped:Connect(function(dt)
+    local camera=workspace.CurrentCamera
+    local enabled=Combat.active and Crosshair.Enabled and camera~=nil
+    if not enabled then
+        for i=1,8 do CrosshairLines[i].Visible=false;CrosshairOutlines[i].Visible=false end
+        CrosshairDot.Visible=false;CrosshairDotOutline.Visible=false
+        return
+    end
+    local center=aim_getMouseLocation()
+    local selected
+    if Crosshair.FollowTarget then
+        selected=Combat.FindTarget(CrosshairTargetSettings,camera,center,Crosshair.sticky)
+        Crosshair.sticky=selected and selected.actor
+    else Crosshair.sticky=nil end
+    if selected and selected.part and selected.part.Parent then
+        local point=Combat.PartPosition(selected.actor,selected.part)
+        local projected,onScreen=camera:WorldToViewportPoint(point)
+        local screen=Vector2.new(projected.X,projected.Y)
+        if onScreen and projected.Z>0 and (screen-center).Magnitude<=Silent.FOV then center=screen end
+    end
+    if Crosshair.Style=='Spin' then
+        Crosshair.Phase=(Crosshair.Phase+dt*Crosshair.Speed*math.pi*2)%(math.pi*2)
+    else Crosshair.Phase=0 end
+    local count=math.clamp(math.floor(Crosshair.Segments),1,8)
+    for i=1,8 do
+        local line,outline=CrosshairLines[i],CrosshairOutlines[i]
+        line.Visible=i<=count;outline.Visible=i<=count and Crosshair.Outline
+        if i<=count then
+            local angle=Crosshair.Phase+(i-1)*math.pi*2/count
+            local direction=Vector2.new(math.cos(angle),math.sin(angle))
+            line.From=center+direction*Crosshair.Gap
+            line.To=center+direction*(Crosshair.Gap+Crosshair.Length)
+            line.Color=Crosshair.Color;line.Thickness=Crosshair.Thickness
+            outline.From=line.From-direction;outline.To=line.To+direction
+            outline.Color=Crosshair.OutlineColor;outline.Thickness=Crosshair.Thickness+2
+        end
+    end
+    CrosshairDot.Visible=Crosshair.CenterDot
+    CrosshairDotOutline.Visible=Crosshair.CenterDot and Crosshair.Outline
+    CrosshairDot.Position=center;CrosshairDot.Radius=math.max(1,Crosshair.Thickness*.5)
+    CrosshairDot.Color=Crosshair.DotColor
+    CrosshairDotOutline.Position=center;CrosshairDotOutline.Radius=CrosshairDot.Radius+1
+    CrosshairDotOutline.Color=Crosshair.OutlineColor
+end))
 local SharedPage = visualPage('Settings')
 
 local ChamsEngine, AdvancedESP = Sense.chams, Sense.advanced
@@ -1998,7 +2101,7 @@ do
         speedState={},flyState={},modifierState={}}
     Combat.Movement=M
     local left=MovementPage:AddSection({Title="Movement",Side="Left"})
-    local right=MovementPage:AddSection({Title="Restrictions",Side="Right"})
+    local right=MovementPage:AddSection({Title="Misc",Side="Right"})
     local flight=FlightPage:AddSection({Title="Fly",Side="Left"})
     local modifier=FlightPage:AddSection({Title="Modifier",Side="Right"})
     local function toggle(section,text,key)
