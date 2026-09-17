@@ -39,8 +39,8 @@ local ThemeManager = loadstring(game:HttpGet(repo .. 'addons/ThemeManager.lua'))
 local SaveManager = loadstring(game:HttpGet(repo .. 'addons/SaveManager.lua'))()
 
 ThemeManager.BuiltInThemes.Clean = { 0, {
-    FontColor = 'E0E0E0', MainColor = '191919', BackgroundColor = '121212',
-    AccentColor = 'BEBEBE', OutlineColor = '313131'
+    FontColor = 'E8E8E8', MainColor = '1D1D1D', BackgroundColor = '141414',
+    AccentColor = 'BEBEBE', OutlineColor = '383838'
 } }
 ThemeManager.DefaultTheme = 'Clean'
 
@@ -104,7 +104,7 @@ Library.Create = function(self, class, properties)
 end
 
 local Window = Library:CreateWindow({
-    Title = 'Lean v2.7.4 | BRM5 ',
+    Title = 'Lean v2.7.7 | BRM5 ',
     Center = true,
     AutoShow = true,
     Size = UDim2.fromOffset(568, 660),
@@ -465,7 +465,8 @@ function Combat.TriggerTarget(settings,camera,mouse)
     return closest
 end
 function Combat.KeyActive(picker,_state)
-    return not Library:IsTyping() and picker ~= nil and picker:GetState() == true
+    if Library:IsTyping() or picker==nil then return false end
+    return picker.Value=="None" or picker:GetState()==true
 end
 function Combat.RageActive()
     return Combat.active and Rage.Enabled and Combat.KeyActive(RageKeyPicker)
@@ -484,7 +485,7 @@ function Combat.Fire()
     end
 end
 local keyStates={silent={},trigger={}}
-function Combat.Frame()
+function Combat.Frame(dt)
     if not Combat.active then return end
     AimCamera=workspace.CurrentCamera
     if not AimCamera then return end
@@ -583,6 +584,7 @@ function Combat.ShotFrame(weapon,cf,target,settings)
     end
     return frame
 end
+
 function Combat.Install()
     if Combat.installed then return true end
     local class
@@ -793,7 +795,7 @@ end
 local SilentGroup = Tabs.Main:AddLeftGroupbox('Silent Aim')
 local EnabledControl = addToggle(SilentGroup, 'silent_enabled', 'Enabled', Silent, 'Enabled')
 EnabledControl:AddKeyPicker('silent_key', {
-    Default = 'Q', Mode = 'Hold', Modes = { 'Always', 'Hold', 'Toggle' },
+    Default = 'None', Mode = 'Hold', Modes = { 'Always', 'Hold', 'Toggle' },
     Text = 'Silent Aim', SyncToggleState = false,
 })
 SilentKeyPicker = Options.silent_key
@@ -846,7 +848,7 @@ addToggle(ChecksGroup, 'silent_hitscan', 'Hitscan', Silent, 'Hitscan')
 local TriggerGroup = Tabs.Main:AddLeftGroupbox('Triggerbot')
 local TriggerControl = addToggle(TriggerGroup, 'trigger_enabled', 'Enabled', TriggerBotSettings, 'Enabled')
 TriggerControl:AddKeyPicker('trigger_key', {
-    Default = 'E', Mode = 'Hold', Modes = { 'Always', 'Hold', 'Toggle' },
+    Default = 'None', Mode = 'Hold', Modes = { 'Always', 'Hold', 'Toggle' },
     Text = 'Triggerbot', SyncToggleState = false,
 })
 TriggerKeyPicker = Options.trigger_key
@@ -887,17 +889,17 @@ local function addSubtabs(name, pages)
     local mainFrame = firstFrame.Parent.Parent
     local bar = Library:Create('Frame', {
         Name = name .. 'Subtabs', BackgroundTransparency = 1,
-        Position = UDim2.fromOffset(7, 4), Size = UDim2.new(1, -14, 0, 30),
+        Position = UDim2.fromOffset(7, 4), Size = UDim2.new(1, -14, 0, 28),
         ZIndex = 3, Parent = mainFrame,
     })
     Library:Create('UIListLayout', {
         FillDirection = Enum.FillDirection.Horizontal,
-        SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 6),
+        SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 4),
         Parent = bar,
     })
     local divider = Library:Create('Frame', {
         Name = 'SubtabDivider', BackgroundColor3 = Library.OutlineColor,
-        BorderSizePixel = 0, Position = UDim2.fromOffset(7, 33),
+        BorderSizePixel = 0, Position = UDim2.fromOffset(7, 32),
         Size = UDim2.new(1, -14, 0, 1), ZIndex = 3, Parent = mainFrame,
     })
     Library:AddToRegistry(divider, { BackgroundColor3 = 'OutlineColor' })
@@ -913,7 +915,7 @@ local function addSubtabs(name, pages)
             page.Active = active
             page.Indicator.Visible = active
             page.Button.BackgroundTransparency = active and 0 or 1
-            page.Button.TextTransparency = active and 0 or 0.3
+            page.Button.TextTransparency = active and 0 or 0.18
             for _, group in ipairs(page.Groups) do
                 groupFrame(group).Visible = active
             end
@@ -930,16 +932,17 @@ local function addSubtabs(name, pages)
             Text = page.Name, Font = Library.Font, TextSize = 14,
             AutoButtonColor = false, BackgroundColor3 = Library.BackgroundColor,
             TextColor3 = Library.FontColor, BorderSizePixel = 0,
-            Size = UDim2.fromOffset(math.max(80, Library:GetTextBounds(page.Name, Library.Font, 14) + 20), 30), LayoutOrder = index,
+            Size = UDim2.fromOffset(math.max(58, Library:GetTextBounds(page.Name, Library.Font, 14) + 18), 28), LayoutOrder = index,
             ZIndex = 4, Parent = bar,
         })
         Library:AddToRegistry(page.Button, {
             BackgroundColor3 = 'BackgroundColor', TextColor3 = 'FontColor',
         })
+        Library:Create('UICorner', {CornerRadius=UDim.new(0,2),Parent=page.Button})
         page.Indicator = Library:Create('Frame', {
             Name = 'ActiveIndicator', BackgroundColor3 = Library.AccentColor,
             BorderSizePixel = 0, AnchorPoint = Vector2.new(0, 1),
-            Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 2),
+            Position = UDim2.new(0,6,1,0), Size = UDim2.new(1,-12,0,2),
             Visible = false, ZIndex = 5, Parent = page.Button,
         })
         Library:AddToRegistry(page.Indicator, { BackgroundColor3 = 'AccentColor' })
@@ -947,7 +950,7 @@ local function addSubtabs(name, pages)
             if not page.Active then page.Button.TextTransparency = 0 end
         end))
         Library:GiveSignal(page.Button.MouseLeave:Connect(function()
-            if not page.Active then page.Button.TextTransparency = 0.3 end
+            if not page.Active then page.Button.TextTransparency = 0.18 end
         end))
         Library:GiveSignal(page.Button.MouseButton1Click:Connect(function()
             if not Library:MouseIsOverOpenedFrame() then selectPage(page) end
@@ -959,7 +962,7 @@ end
 local RageGroup = Tabs.Ragebot:AddLeftGroupbox('Ragebot')
 local RageControl = addToggle(RageGroup, 'rage_enabled', 'Enabled', Rage, 'Enabled')
 RageControl:AddKeyPicker('rage_key', {
-    Default = 'R', Mode = 'Hold', Modes = { 'Always', 'Hold', 'Toggle' },
+    Default = 'None', Mode = 'Hold', Modes = { 'Always', 'Hold', 'Toggle' },
     Text = 'Ragebot', SyncToggleState = false,
 })
 RageKeyPicker = Options.rage_key
@@ -2088,13 +2091,13 @@ do
     local MovementPage = legacyPage(Tabs.Movement, movementPages, "Movement")
     local FlightPage = legacyPage(Tabs.Movement, movementPages, "Flight")
     local M={active=true,hooks={},Speed=false,SpeedValue=24,Smoothing=false,Stamina=false,
-        AutoSprint=false,
+        AutoSprint=false,AirStrafe=false,AirStrafeSpeed=24,BunnyHop=false,NoJumpDelay=true,
         AutoHeal=false,HealThreshold=75,HealItems={Vitamins=true,Bandage=true,Dressing=true},HealAvoid={},nextHeal=0,nextHealCheck=0,
-        Penalties=false,Survival=false,NoFallDamage=false,Fly=false,FlySpeed=40,Modifier=false,Multiplier=2,Noclip=false,
+        Penalties=false,Survival=false,NoFallDamage=false,Fly=false,FlySpeed=40,Modifier=false,Multiplier=2,
         speedState={},flyState={},modifierState={}}
     Combat.Movement=M
     local left=MovementPage:AddSection({Title="Movement",Side="Left"})
-    local right=MovementPage:AddSection({Title="Restrictions",Side="Right"})
+    local right=MovementPage:AddSection({Title="Misc",Side="Right"})
     local flight=FlightPage:AddSection({Title="Fly",Side="Left"})
     local modifier=FlightPage:AddSection({Title="Modifier",Side="Right"})
     local function toggle(section,text,key)
@@ -2107,6 +2110,14 @@ do
     M.speedKey=left:AddKeyPicker({Text="Speed Key",Flag="movement_speed_key",Default=Enum.KeyCode.G,Mode="Toggle",Callback=function() end})
     toggle(left,"No Movement Smoothing","Smoothing")
     toggle(left,"Auto Sprint","AutoSprint")
+    toggle(left,"Air Strafe","AirStrafe")
+    left:AddSlider({Text="Air Strafe Speed",Flag="movement_air_strafe_speed",Min=1,Max=150,Default=24,Rounding=1,Suffix=" studs/s",
+        Callback=function(v) M.AirStrafeSpeed=v end})
+    toggle(left,"Bunny Hop","BunnyHop")
+    M.bunnyKey=left:AddKeyPicker({Text="Bunny Hop",Flag="movement_bunny_key",Default="None",Mode="Hold",Callback=function() end})
+    left:AddToggle({Text="No Jump Delay",Flag="movement_NoJumpDelay",Default=true,
+        Callback=function(v) M.NoJumpDelay=v end})
+
     toggle(left,"Omni Sprint","OmniSprint")
     toggle(left,"Aim / Shoot While Sprinting","SprintCombat")
     toggle(right,"Infinite Stamina","Stamina")
@@ -2122,8 +2133,7 @@ do
     toggle(flight,"Fly","Fly")
     flight:AddSlider({Text="Fly Speed",Flag="movement_fly_speed",Min=1,Max=150,Default=40,Rounding=1,Suffix=" studs/s",
         Callback=function(v) M.FlySpeed=v end})
-    M.flyKey=flight:AddKeyPicker({Text="Fly Key",Flag="movement_fly_key",Default=Enum.KeyCode.F,Mode="Toggle",Callback=function() end})
-    toggle(flight,"Fly Noclip","Noclip")
+    M.flyKey=flight:AddKeyPicker({Text="Fly Key",Flag="movement_fly_key",Default="None",Mode="Toggle",Callback=function() end})
     toggle(modifier,"Fly Modifier","Modifier")
     modifier:AddSlider({Text="Speed Multiplier",Flag="movement_fly_multiplier",Min=1,Max=5,Default=2,Rounding=.1,Suffix="x",
         Callback=function(v) M.Multiplier=v end})
@@ -2210,6 +2220,57 @@ do
         local used,err=pcall(M.healActions[item])
         if not used then M.healError=tostring(err) end
     end
+    function M.ResetBunny()
+        M.bunnyController=nil;M.bunnyWaitingForAir=false;M.bunnyNextAttempt=0
+    end
+    function M.StepBunny(ctrl,now)
+        local actor=ctrl._localActor
+        if not M.bunnyActive or M.flyActive or not M.CanMove(ctrl) or not actor.Alive
+            or ctrl.IsSwimming or ctrl.IsSliding or ctrl._emoting
+            or (actor.CurrentState and actor.CurrentState.Dragging) then M.ResetBunny();return end
+        if M.bunnyController~=ctrl then M.ResetBunny();M.bunnyController=ctrl end
+        if not ctrl.IsGrounded then
+            M.bunnyWaitingForAir=false
+            return
+        end
+        if not M.heightStates or ctrl.HeightState~=M.heightStates.Standing then M.ResetBunny();return end
+        if not M.NoJumpDelay and now<(M.bunnyNextAttempt or 0) then return end
+        if M.bunnyWaitingForAir and ctrl.VelocityGravity>0 then return end
+        local jump=M.inputService and M.inputService._mounts and M.inputService._mounts.Jump
+        if type(jump)~="function" then return end
+        local previousUp=ctrl._up
+        -- Scope the cooldown override to this Bunny Hop request only.
+        M.bunnyJumpingController=ctrl
+        local ok,err=pcall(jump,true,false,false)
+        M.bunnyJumpingController=nil
+        ctrl._up=previousUp
+        M.bunnyNextAttempt=M.NoJumpDelay and now or now+.2
+        M.bunnyWaitingForAir=ok and ctrl.VelocityGravity>0
+        if not ok then M.bunnyError=tostring(err) end
+    end
+    function M.RestoreAirSpeed()
+        local ctrl=M.airController
+        if ctrl and ctrl.MoveSpeed==M.airAppliedSpeed then ctrl.MoveSpeed=M.airOriginalSpeed end
+        M.airController=nil;M.airOriginalSpeed=nil;M.airAppliedSpeed=nil
+    end
+    function M.AirDirection(ctrl,input,nativeDirection)
+        local states=M.heightStates
+        if not M.AirStrafe or not M.airInputAllowed or M.flyActive or not M.CanMove(ctrl)
+            or not ctrl._localActor.Alive or ctrl.IsGrounded or ctrl.IsSwimming or ctrl.IsSliding or ctrl._emoting
+            or not states or (ctrl.HeightState~=states.Standing and ctrl.HeightState~=states.Falling)
+            or input.Magnitude<.01 then return nativeDirection end
+        local camera=workspace.CurrentCamera
+        if not camera then return nativeDirection end
+        local look=camera.CFrame.LookVector
+        local yaw=math.atan2(-look.X,-look.Z)
+        local direction=CFrame.Angles(0,yaw,0):VectorToWorldSpace(Vector3.new(input.X,0,input.Y).Unit)
+        -- The native controller still handles vertical motion and collision resolution.
+        ctrl._groundedInputDirection=input
+        M.airController=ctrl;M.airOriginalSpeed=ctrl.MoveSpeed
+        M.airAppliedSpeed=M.AirStrafeSpeed*math.min(input.Magnitude,1)
+        ctrl.MoveSpeed=M.airAppliedSpeed
+        return direction
+    end
     function M.Install(class)
         local standing
         -- shared.import belongs to the game's module environment, not the executor.
@@ -2220,6 +2281,7 @@ do
                 if ok then
                     for _,value in pairs(values) do
                         if type(value)=="table" and type(value.CharacterHeightState)=="table" then
+                            M.heightStates=value.CharacterHeightState
                             standing=value.CharacterHeightState.Standing
                             break
                         end
@@ -2233,6 +2295,7 @@ do
             assert(type(class[key])=="function","Missing CharacterController."..key)
         end
         M.Wrap(class,"_processMovementInput",function(original,ctrl,input,dt)
+            M.RestoreAirSpeed()
             local actor=ctrl._localActor
             if standing~=nil and (M.OmniSprint or M.SprintCombat) and M.CanMove(ctrl) and ctrl.TrySprinting
                 and ctrl.HeightState==standing and not ctrl.IsSliding and not ctrl.IsSwimming
@@ -2241,7 +2304,7 @@ do
                 local aimOK=M.SprintCombat or not actor.ADS
                 if directionOK and aimOK then ctrl.IsSprinting=true end
             end
-            return original(ctrl,input,dt)
+            return M.AirDirection(ctrl,input,original(ctrl,input,dt))
         end)
         M.Wrap(class,"_accelerate",function(original,ctrl,dt,magnitude)
             local a=ctrl._localActor
@@ -2272,6 +2335,7 @@ do
             return original(ctrl,...)
         end)
         M.Wrap(class,"_exhaust",function(original,ctrl,...)
+            if M.NoJumpDelay and M.bunnyJumpingController==ctrl then return true end
             if M.Stamina then ctrl._exhaustStart=tick()-2;ctrl._exhausted=tick()-1;return true end
             return original(ctrl,...)
         end)
@@ -2294,6 +2358,8 @@ do
                 local result=table.pack(pcall(original,ctrl,input,dt))
                 if autoSprint then ctrl.TrySprinting=previousSprint end
                 if not result[1] then error(result[2],0) end
+                local hopOK,hopError=pcall(M.StepBunny,ctrl,os.clock())
+                if not hopOK then M.bunnyError=tostring(hopError);M.ResetBunny() end
                 -- FirearmInventory checks Actor.Sprinting even inside its yielding fire loop.
                 -- Keep physical sprint speed on the controller; expose a ready weapon pose.
                 if M.SprintCombat and M.CanMove(ctrl) then
@@ -2304,6 +2370,7 @@ do
             end
             local camera=workspace.CurrentCamera
             if not camera then return original(ctrl,input,dt) end
+            M.RestoreAirSpeed();M.ResetBunny()
             local position=ctrl._position
             if ctrl._groundHitbox then position=ctrl._groundHitbox.CFrame:PointToWorldSpace(position) end
             local direction=Vector3.zero
@@ -2317,14 +2384,12 @@ do
             local speed=M.FlySpeed*(M.modifierActive and M.Multiplier or 1)
             local target=position+direction*speed*math.clamp(dt,0,.1)
             local grounded,normal=false,Vector3.yAxis
-            if not M.Noclip then
-                local oldPosition=ctrl._position
-                ctrl._position=position
-                local result=table.pack(pcall(ctrl._processNewPosition,ctrl,target))
-                ctrl._position=oldPosition
-                if not result[1] then error(result[2],0) end
-                target,grounded,normal=result[2],result[3],result[4]
-            end
+            local oldPosition=ctrl._position
+            ctrl._position=position
+            local result=table.pack(pcall(ctrl._processNewPosition,ctrl,target))
+            ctrl._position=oldPosition
+            if not result[1] then error(result[2],0) end
+            target,grounded,normal=result[2],result[3],result[4]
             ctrl._position=target;ctrl._correctedPosition=target;ctrl._groundHitbox=nil
             ctrl.VelocityGravity=0;ctrl.MoveSpeed=0;ctrl.IsGrounded=grounded;ctrl.SlopeNormal=normal
             ctrl.IsSliding=false;ctrl.IsSprinting=false;ctrl._lastMovement=Vector2.zero
@@ -2373,6 +2438,7 @@ do
     end
     function M.Destroy()
         M.active=false
+        M.RestoreAirSpeed();M.ResetBunny()
         if M.sprintActor and M.sprintController then M.sprintActor.Sprinting=M.sprintController.IsSprinting end
         if M.connection then M.connection:Disconnect() end
         for i=#M.hooks,1,-1 do
@@ -2385,7 +2451,7 @@ do
     Combat.Destroy=function() M.Destroy();oldDestroy() end
     M.connection=AimRunService.Heartbeat:Connect(function()
         local now=tick()
-        if (M.AutoHeal or M.AutoSprint) and (not M.inputService or not M.medicalInterface)
+        if (M.AutoHeal or M.AutoSprint or M.AirStrafe or M.BunnyHop) and (not M.inputService or not M.medicalInterface)
             and now>(M.nextActionResolve or 0) then
             M.nextActionResolve=now+2
             M.ResolveActions()
@@ -2397,6 +2463,16 @@ do
             M.sprintInputAllowed=ok and not blocked
             if not ok then M.sprintInputError=tostring(blocked) end
         end
+        local movementBlocked=true
+        if M.AirStrafe or M.BunnyHop then
+            local ok,blocked=pcall(M.InputBlocked)
+            movementBlocked=not ok or blocked or game:GetService("GuiService").MenuIsOpen
+                or (type(isrbxactive)=="function" and not isrbxactive())
+        end
+        M.airInputAllowed=not movementBlocked
+        M.bunnyActive=M.BunnyHop and not movementBlocked and Combat.KeyActive(M.bunnyKey)
+        if not M.bunnyActive then M.ResetBunny() end
+        if not M.AirStrafe or movementBlocked then M.RestoreAirSpeed() end
         local focused=Library:IsTyping()
         if not focused then
             local speed=Combat.KeyActive(M.speedKey,M.speedState)
@@ -2878,7 +2954,7 @@ do
     toggle(ml,"Extended Reach",A,"Reach","melee_extended_reach")
     slider(ml,"Reach Distance",A,"Distance","melee_reach_distance",0,20,8,.5," studs")
     toggle(mr,"Melee Aura",A,"Aura","melee_kill_aura")
-    A.key=mr:AddKeyPicker({Text="Kill Aura Key",Flag="melee_aura_key",Default=Enum.KeyCode.K,Mode="Toggle",Callback=function() end})
+    A.key=mr:AddKeyPicker({Text="Kill Aura Key",Flag="melee_aura_key",Default="None",Mode="Toggle",Callback=function() end})
     mr:AddDropdown({Text="Targets",Flag="melee_aura_targets",Options={"Zombie","NPC","Player"},Default={"Zombie","NPC"},Multi=true,
         Callback=function(values)
             local selected={};local map={Zombie="Zombies",NPC="NPCs",Player="Players"}
@@ -2894,7 +2970,7 @@ do
     toggle(vl,"Bounce Mode",V,"Bounce","vehicle_bounce")
     toggle(vl,"Heli Fast Startup",V,"FastStart","vehicle_heli_start")
     toggle(vr,"Vehicle Fly",V,"Fly","vehicle_fly")
-    V.key=vr:AddKeyPicker({Text="Vehicle Fly Key",Flag="vehicle_fly_key",Default=Enum.KeyCode.V,Mode="Toggle",Callback=function() end})
+    V.key=vr:AddKeyPicker({Text="Vehicle Fly Key",Flag="vehicle_fly_key",Default="None",Mode="Toggle",Callback=function() end})
     slider(vr,"Fly Speed",V,"FlySpeed","vehicle_fly_speed",1,2000,60,1," studs/s")
     toggle(vr,"Vehicle Noclip",V,"Noclip","vehicle_noclip")
     local tp=TurretPage
@@ -3335,7 +3411,20 @@ local WM: {[string]: any} = {
 
 local Booster={enabled=false,records={},seen={},queue={},cursor=1,restoring=false}
 WM.Booster=Booster
-function Booster.Save(object,property,value)
+function Booster.Save(object,property,value,hidden)
+    if hidden and (type(gethiddenproperty)~="function" or type(sethiddenproperty)~="function") then return end
+    local ok,old=pcall(function()
+        if hidden then return gethiddenproperty(object,property) end
+        return object[property]
+    end)
+    if not ok or old==value or (hidden and old==nil) then return end
+    local written,changed=pcall(function()
+        if hidden then return sethiddenproperty(object,property,value)~=nil end
+        object[property]=value
+        return true
+    end)
+    if not written or not changed then return end
+    -- Keep restoration data only for properties that were actually changed.
     local record=Booster.seen[object]
     if not record then
         record={object=object,values={}}
@@ -3343,18 +3432,24 @@ function Booster.Save(object,property,value)
         table.insert(Booster.records,record)
     end
     if record.values[property]==nil then
-        local ok,old=pcall(function() return object[property] end)
-        if not ok or old==value then return end
         record.values[property]=old
+        if hidden then
+            record.hidden=record.hidden or {}
+            record.hidden[property]=true
+        end
     end
-    pcall(function() object[property]=value end)
 end
 function Booster.Process(object)
+    if object:IsA("Terrain") then return end
     if object:IsA("BasePart") then
         Booster.Save(object,"Material",Enum.Material.SmoothPlastic)
+        Booster.Save(object,"MaterialVariant","")
         Booster.Save(object,"Reflectance",0)
         Booster.Save(object,"CastShadow",false)
-        if object:IsA("MeshPart") then Booster.Save(object,"TextureID","") end
+        if object:IsA("MeshPart") then
+            Booster.Save(object,"TextureID","")
+            Booster.Save(object,"RenderFidelity",Enum.RenderFidelity.Performance)
+        end
     elseif object:IsA("Decal") or object:IsA("Texture") then
         Booster.Save(object,"Transparency",1)
     elseif object:IsA("SpecialMesh") then
@@ -3372,6 +3467,8 @@ function Booster.Scan()
     Booster.queue=workspace:GetDescendants()
     for _,object in ipairs(WMLighting:GetDescendants()) do table.insert(Booster.queue,object) end
     Booster.cursor=1
+    -- Terrain decoration controls the procedural grass, including streamed terrain.
+    Booster.Save(workspace.Terrain,"Decoration",false,true)
     Booster.Save(workspace.Terrain,"WaterWaveSize",0)
     Booster.Save(workspace.Terrain,"WaterWaveSpeed",0)
     Booster.Save(workspace.Terrain,"WaterReflectance",0)
@@ -3393,12 +3490,16 @@ function Booster.RestoreOne()
     local record=table.remove(Booster.records)
     if not record then return false end
     for property,value in pairs(record.values) do
-        pcall(function() record.object[property]=value end)
+        pcall(function()
+            if record.hidden and record.hidden[property] then sethiddenproperty(record.object,property,value)
+            else record.object[property]=value end
+        end)
     end
     Booster.seen[record.object]=nil
     return true
 end
 function Booster.Step()
+    if not Booster.restoring and (not Booster.enabled or #Booster.queue==0) then return end
     local deadline=os.clock()+.002
     for _=1,120 do
         if Booster.restoring then
@@ -3765,9 +3866,29 @@ table.insert(Combat.connections, AimRunService.RenderStepped:Connect(Combat.Fram
 -- Keep overlay visibility independent from text and performance updates.
 local OverlaySettings={Watermark=true,Keybinds=true}
 local watermark,label=Library.Watermark,Library.WatermarkText
+local function refineOverlay(frame)
+    frame.BorderSizePixel=0
+    frame.BackgroundColor3=Library.MainColor
+    Library:AddToRegistry(frame,{BackgroundColor3="MainColor"},true)
+    local corner=frame:FindFirstChildOfClass("UICorner") or Instance.new("UICorner")
+    corner.CornerRadius=UDim.new(0,3);corner.Parent=frame
+    local stroke=frame:FindFirstChildOfClass("UIStroke") or Instance.new("UIStroke")
+    stroke.Color=Library.OutlineColor;stroke.Thickness=1;stroke.Transparency=.1;stroke.Parent=frame
+    Library:AddToRegistry(stroke,{Color="OutlineColor"},true)
+    for _,child in ipairs(frame:GetChildren()) do
+        if child:IsA("Frame") then
+            child.BorderSizePixel=0
+            child.BackgroundColor3=Library.MainColor
+            Library:AddToRegistry(child,{BackgroundColor3="MainColor"},true)
+            local innerCorner=child:FindFirstChildOfClass("UICorner") or Instance.new("UICorner")
+            innerCorner.CornerRadius=UDim.new(0,2);innerCorner.Parent=child
+        end
+    end
+end
+refineOverlay(watermark)
 watermark.Size=UDim2.fromOffset(220,28)
-label.Position=UDim2.fromOffset(9,0)
-label.Size=UDim2.new(1,-18,1,0)
+label.Position=UDim2.fromOffset(12,0)
+label.Size=UDim2.new(1,-24,1,0)
 label.TextSize=15
 label.TextScaled=false
 label.TextWrapped=false
@@ -3783,8 +3904,12 @@ for _,child in ipairs(watermark:GetDescendants()) do
         end
     end
 end
+local watermarkAccent=Library:Create("Frame",{Name="WatermarkAccent",BorderSizePixel=0,
+    Position=UDim2.fromOffset(12,0),Size=UDim2.fromOffset(24,2),
+    BackgroundColor3=Library.AccentColor,ZIndex=label.ZIndex+1,Parent=watermark})
+Library:AddToRegistry(watermarkAccent,{BackgroundColor3="AccentColor"},true)
 local function resizeWatermark()
-    watermark.Size=UDim2.fromOffset(math.max(120,math.ceil(label.TextBounds.X)+24),28)
+    watermark.Size=UDim2.fromOffset(math.max(120,math.ceil(label.TextBounds.X)+28),28)
 end
 Library:SetWatermarkVisibility(true)
 Library.KeybindFrame.Visible=true
@@ -3837,7 +3962,7 @@ end)
 
 -- I set NoUI so it does not show up in the keybinds menu
 MenuGroup:AddButton('Unload', function() Library:Unload() end)
-MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', { Default = 'End', NoUI = true, Text = 'Menu keybind' })
+MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', { Default = 'None', NoUI = true, Text = 'Menu keybind' })
 
 Library.ToggleKeybind = Options.MenuKeybind -- Allows you to have a custom keybind for the menu
 
@@ -3870,6 +3995,59 @@ SaveManager:BuildConfigSection(Tabs['UI Settings'])
 -- NOTE: you can also call ThemeManager:ApplyToGroupbox to add it to a specific groupbox
 ThemeManager:ApplyToTab(Tabs['UI Settings'])
 
+-- Retain Linoria's keybind rows while giving the overlay consistent padding.
+local keybindFrame,keybindContainer=Library.KeybindFrame,Library.KeybindContainer
+refineOverlay(keybindFrame)
+local keybindInner=keybindContainer.Parent
+for _,child in ipairs(keybindInner:GetChildren()) do
+    if child:IsA("TextLabel") then
+        child.Position=UDim2.fromOffset(10,3)
+        child.Size=UDim2.new(1,-20,0,22)
+        child.TextSize=14;child.TextStrokeTransparency=1
+        child.TextYAlignment=Enum.TextYAlignment.Center
+    elseif child:IsA("Frame") and child~=keybindContainer and child.Size.Y.Offset==2 then
+        child.Position=UDim2.fromOffset(10,0)
+        child.Size=UDim2.fromOffset(24,2)
+    end
+end
+keybindContainer.Position=UDim2.fromOffset(0,29)
+keybindContainer.Size=UDim2.new(1,0,1,-35)
+local keybindPadding=keybindContainer:FindFirstChildOfClass("UIPadding") or Instance.new("UIPadding")
+keybindPadding.PaddingLeft=UDim.new(0,10);keybindPadding.PaddingRight=UDim.new(0,10)
+keybindPadding.Parent=keybindContainer
+local function resizeKeybinds()
+    local height,width=0,190
+    for _,row in ipairs(keybindContainer:GetChildren()) do
+        if row:IsA("TextLabel") and row.Visible then
+            height+=20;width=math.max(width,math.ceil(row.TextBounds.X)+24)
+        end
+    end
+    keybindFrame.Size=UDim2.fromOffset(width,math.max(36,height+35))
+end
+local function styleKeybindRow(row)
+    if not row:IsA("TextLabel") then return end
+    row.Size=UDim2.new(1,0,0,20);row.TextSize=13
+    row.TextWrapped=false;row.TextScaled=false;row.TextStrokeTransparency=1
+    row.TextYAlignment=Enum.TextYAlignment.Center
+    Library:GiveSignal(row:GetPropertyChangedSignal("TextBounds"):Connect(resizeKeybinds))
+    Library:GiveSignal(row:GetPropertyChangedSignal("Visible"):Connect(resizeKeybinds))
+end
+for _,row in ipairs(keybindContainer:GetChildren()) do styleKeybindRow(row) end
+Library:GiveSignal(keybindContainer.ChildAdded:Connect(function(row)
+    styleKeybindRow(row);resizeKeybinds()
+end))
+for _,picker in pairs(Options) do
+    if picker.Type=="KeyPicker" then
+        local update=picker.Update
+        picker.Update=function(self,...)
+            local result=table.pack(update(self,...))
+            resizeKeybinds()
+            return table.unpack(result,1,result.n)
+        end
+    end
+end
+resizeKeybinds()
+
 -- You can use SaveManager:LoadAutoloadConfig() to load a config
 -- which has been marked to be one that auto loads!
 for _,picker in pairs(Options) do
@@ -3889,8 +4067,8 @@ for _,picker in pairs(Options) do
 end
 SaveManager:LoadAutoloadConfig()
 -- Migrate the previous mouse defaults when loading an older configuration.
-for id, key in pairs({ silent_key = 'Q', trigger_key = 'E', rage_key = 'R' }) do
+for _, id in ipairs({ 'silent_key', 'trigger_key', 'rage_key' }) do
     local picker = Options[id]
-    if picker.Value == 'MB2' then picker:SetValue({ key, picker.Mode }) end
+    if picker.Value == 'MB2' then picker:SetValue({ 'None', picker.Mode }) end
 end
 Combat.ESP.Load()
