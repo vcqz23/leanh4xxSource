@@ -104,7 +104,7 @@ Library.Create = function(self, class, properties)
 end
 
 local Window = Library:CreateWindow({
-    Title = 'Lean v2.7 | BRM5 ',
+    Title = 'Lean v2.7.4 | BRM5 ',
     Center = true,
     AutoShow = true,
     Size = UDim2.fromOffset(568, 660),
@@ -990,13 +990,13 @@ do
 local Sense = (function()
     local E: {[string]: any} = {
         _hasLoaded = false, objects = {}, errors = {}, scanAt = 0,
-        sharedSettings = {textSize=13, textFont=2, limitDistance=false, maxDistance=1000,
+        sharedSettings = {textSize=13, textFont=2,
             teamBasedColor=false, neutralColor=Color3.fromRGB(100,220,150)},
         teamSettings = {}, chams = {}, advanced = {},
     }
     local white, black = Color3.new(1,1,1), Color3.new(0,0,0)
     local t = {
-        enabled=true, box=false, box3d=false, boxColor={white,1}, box3dColor={white,1},
+        enabled=true, limitDistance=false, maxDistance=1000, box=false, box3d=false, boxColor={white,1}, box3dColor={white,1},
         boxOutline=true, boxOutlineColor={black,1}, boxOutlineThickness=1,
         boxFill=false, boxFillColor={Color3.fromRGB(150,80,255),.2},
         healthBar=false, healthyColor=Color3.new(0,1,0), dyingColor=Color3.new(1,0,0),
@@ -1336,7 +1336,7 @@ local Sense = (function()
         if typeof(position)~="Vector3" then return end
         local dist=(position-origin).Magnitude
         local shared=E.sharedSettings
-        if shared.limitDistance and dist>shared.maxDistance then return end
+        if t.limitDistance and dist>t.maxDistance then return end
         local adv=E.advanced[kind]
         local override=shared.teamBasedColor and E.TeamColor(a) or nil
         local delta=root and position-root.Position or Vector3.zero
@@ -1639,9 +1639,17 @@ local function espDefault(tbl,key)
 end
 
 
+local function addESPDistance(section,kind)
+    local settings=Sense.teamSettings[kind]
+    section:AddToggle({Text="Distance Check",Flag=kind.."_distance_check",Default=settings.limitDistance,
+        Callback=function(v) settings.limitDistance=v end})
+    section:AddSlider({Text="Max Distance",Flag=kind.."_max_distance",Min=50,Max=2000,
+        Default=settings.maxDistance,Suffix=" studs",Callback=function(v) settings.maxDistance=v end})
+end
 local NpcGeneral = NpcPage:AddSection({Title="General",Side="Left"})
 NpcGeneral:AddToggle({Text="ESP Enabled",Flag="npc_enabled",Default=true,
     Callback=function(v) Sense.teamSettings.npc.enabled=v end})
+addESPDistance(NpcGeneral,"npc")
 local function buildTeamPage(page, team)
     local t     = Sense.teamSettings[team]
     local chams = ChamsEngine[team]
@@ -1951,6 +1959,7 @@ buildTeamPage(NpcPage,"npc")
 local PlayerGeneral=PlayersPage:AddSection({Title="General",Side="Left"})
 PlayerGeneral:AddToggle({Text="ESP Enabled",Flag="players_enabled",Default=false,
     Callback=function(v) Sense.teamSettings.players.enabled=v end})
+addESPDistance(PlayerGeneral,"players")
 PlayerGeneral:AddToggle({Text="Team Check",Flag="players_team_check",Default=false,
     Callback=function(v) Sense.teamSettings.players.teamCheck=v end})
 buildTeamPage(PlayersPage,"players")
@@ -1959,7 +1968,7 @@ for _,entry in ipairs({{ZombiePage,"zombies"},{CorpsePage,"corpses"}}) do
     local general=page:AddSection({Title="General",Side="Left"})
     general:AddToggle({Text="ESP Enabled",Flag=kind.."_enabled",Default=false,
         Callback=function(v) Sense.teamSettings[kind].enabled=v end})
-
+    addESPDistance(general,kind)
     buildTeamPage(page,kind)
 end
 -- Settings page ───────────────────────────────────────────────
@@ -1998,22 +2007,6 @@ SharedLeft:AddDropdown({
             if Options.esp_text_font.Value ~= previous then Options.esp_text_font:SetValue(previous) end
         end
     end
-})
-
-SharedLeft:AddToggle({
-    Text = "Limit Distance",
-    Flag = "esp_limit_distance",
-    Default = Sense.sharedSettings.limitDistance,
-    Callback = function(v) Sense.sharedSettings.limitDistance = v end
-})
-
-SharedLeft:AddSlider({
-    Text = "Max Distance",
-    Flag = "esp_max_distance",
-    Min = 50, Max = 2000,
-    Default = Sense.sharedSettings.maxDistance,
-    Suffix = " studs",
-    Callback = function(v) Sense.sharedSettings.maxDistance = v end
 })
 
 SharedLeft:AddSlider({Text="Box Outline Thickness",Flag="npc_box_outline_thickness",Min=1,Max=5,Default=1,Suffix="px",
@@ -2101,7 +2094,7 @@ do
         speedState={},flyState={},modifierState={}}
     Combat.Movement=M
     local left=MovementPage:AddSection({Title="Movement",Side="Left"})
-    local right=MovementPage:AddSection({Title="Misc",Side="Right"})
+    local right=MovementPage:AddSection({Title="Restrictions",Side="Right"})
     local flight=FlightPage:AddSection({Title="Fly",Side="Left"})
     local modifier=FlightPage:AddSection({Title="Modifier",Side="Right"})
     local function toggle(section,text,key)
@@ -2113,6 +2106,7 @@ do
         Callback=function(v) M.SpeedValue=v end})
     M.speedKey=left:AddKeyPicker({Text="Speed Key",Flag="movement_speed_key",Default=Enum.KeyCode.G,Mode="Toggle",Callback=function() end})
     toggle(left,"No Movement Smoothing","Smoothing")
+    toggle(left,"Auto Sprint","AutoSprint")
     toggle(left,"Omni Sprint","OmniSprint")
     toggle(left,"Aim / Shoot While Sprinting","SprintCombat")
     toggle(right,"Infinite Stamina","Stamina")
@@ -2240,22 +2234,14 @@ do
         end
         M.Wrap(class,"_processMovementInput",function(original,ctrl,input,dt)
             local actor=ctrl._localActor
-            local previousSprint=ctrl.TrySprinting
-            local autoSprint=M.AutoSprint and not M.flyActive and M.CanMove(ctrl)
-                and not M.InputBlocked()
-                and input.Magnitude>.01 and (M.OmniSprint or input.Y<-.5)
-            if autoSprint then ctrl.TrySprinting=true end
-            if standing~=nil and (M.OmniSprint or M.SprintCombat or autoSprint) and M.CanMove(ctrl) and ctrl.TrySprinting
+            if standing~=nil and (M.OmniSprint or M.SprintCombat) and M.CanMove(ctrl) and ctrl.TrySprinting
                 and ctrl.HeightState==standing and not ctrl.IsSliding and not ctrl.IsSwimming
                 and not actor.CurrentState.Dragging and input.Magnitude>.01 then
                 local directionOK=M.OmniSprint or input.Y<-.5
                 local aimOK=M.SprintCombat or not actor.ADS
                 if directionOK and aimOK then ctrl.IsSprinting=true end
             end
-            local result=table.pack(pcall(original,ctrl,input,dt))
-            ctrl.TrySprinting=previousSprint
-            if not result[1] then error(result[2],0) end
-            return table.unpack(result,2,result.n)
+            return original(ctrl,input,dt)
         end)
         M.Wrap(class,"_accelerate",function(original,ctrl,dt,magnitude)
             local a=ctrl._localActor
@@ -2294,14 +2280,27 @@ do
             if M.Stamina then ctrl._exhaustStart=tick()-2;ctrl._exhausted=tick()-1 end
             if M.Smoothing then ctrl._lastMovement=input end
             if not (M.flyActive and M.CanMove(ctrl)) then
-                local result=table.pack(original(ctrl,input,dt))
+                -- Request sprint before the native controller computes IsSprinting.
+                -- UI access stays in Heartbeat so it cannot interrupt native movement.
+                local actor=ctrl._localActor
+                local autoSprint=M.AutoSprint and M.sprintInputAllowed and standing~=nil
+                    and not M.flyActive and M.CanMove(ctrl) and ctrl.HeightState==standing
+                    and ctrl.IsGrounded and not ctrl.IsSliding and not ctrl.IsSwimming and not ctrl._emoting
+                    and not (actor.CurrentState and actor.CurrentState.Dragging)
+                    and (M.SprintCombat or not actor.ADS)
+                    and input.Magnitude>.01 and (M.OmniSprint or input.Y<-.5)
+                local previousSprint=ctrl.TrySprinting
+                if autoSprint then ctrl.TrySprinting=true end
+                local result=table.pack(pcall(original,ctrl,input,dt))
+                if autoSprint then ctrl.TrySprinting=previousSprint end
+                if not result[1] then error(result[2],0) end
                 -- FirearmInventory checks Actor.Sprinting even inside its yielding fire loop.
                 -- Keep physical sprint speed on the controller; expose a ready weapon pose.
                 if M.SprintCombat and M.CanMove(ctrl) then
                     M.sprintActor=ctrl._localActor;M.sprintController=ctrl
                     ctrl._localActor.Sprinting=false
                 else M.sprintActor=nil;M.sprintController=nil end
-                return table.unpack(result,1,result.n)
+                return table.unpack(result,2,result.n)
             end
             local camera=workspace.CurrentCamera
             if not camera then return original(ctrl,input,dt) end
@@ -2392,6 +2391,12 @@ do
             M.ResolveActions()
         end
         M.StepAutoHeal(now)
+        M.sprintInputAllowed=false
+        if M.AutoSprint then
+            local ok,blocked=pcall(M.InputBlocked)
+            M.sprintInputAllowed=ok and not blocked
+            if not ok then M.sprintInputError=tostring(blocked) end
+        end
         local focused=Library:IsTyping()
         if not focused then
             local speed=Combat.KeyActive(M.speedKey,M.speedState)
@@ -2868,11 +2873,11 @@ do
     toggle(GunVisualSection,"Gun Debug HUD",Gun,"Debug","gun_debug_hud")
     local mp=MeleePage
     local ml=mp:AddSection({Title="Melee",Side="Left"})
-    local mr=mp:AddSection({Title="Kill Aura",Side="Right"})
+    local mr=mp:AddSection({Title="Melee Aura",Side="Right"})
     toggle(ml,"Melee Force Headshot",A,"Headshot","melee_force_headshot")
     toggle(ml,"Extended Reach",A,"Reach","melee_extended_reach")
     slider(ml,"Reach Distance",A,"Distance","melee_reach_distance",0,20,8,.5," studs")
-    toggle(mr,"Kill Aura",A,"Aura","melee_kill_aura")
+    toggle(mr,"Melee Aura",A,"Aura","melee_kill_aura")
     A.key=mr:AddKeyPicker({Text="Kill Aura Key",Flag="melee_aura_key",Default=Enum.KeyCode.K,Mode="Toggle",Callback=function() end})
     mr:AddDropdown({Text="Targets",Flag="melee_aura_targets",Options={"Zombie","NPC","Player"},Default={"Zombie","NPC"},Multi=true,
         Callback=function(values)
@@ -2890,7 +2895,7 @@ do
     toggle(vl,"Heli Fast Startup",V,"FastStart","vehicle_heli_start")
     toggle(vr,"Vehicle Fly",V,"Fly","vehicle_fly")
     V.key=vr:AddKeyPicker({Text="Vehicle Fly Key",Flag="vehicle_fly_key",Default=Enum.KeyCode.V,Mode="Toggle",Callback=function() end})
-    slider(vr,"Fly Speed",V,"FlySpeed","vehicle_fly_speed",1,250,60,1," studs/s")
+    slider(vr,"Fly Speed",V,"FlySpeed","vehicle_fly_speed",1,2000,60,1," studs/s")
     toggle(vr,"Vehicle Noclip",V,"Noclip","vehicle_noclip")
     local tp=TurretPage
     local ts=tp:AddSection({Title="Turret",Side="Left"})
@@ -3757,32 +3762,49 @@ end
 
 table.insert(Combat.connections, AimRunService.RenderStepped:Connect(Combat.Frame))
 
--- Library functions
--- Sets the watermark visibility
+-- Keep overlay visibility independent from text and performance updates.
+local OverlaySettings={Watermark=true,Keybinds=true}
+local watermark,label=Library.Watermark,Library.WatermarkText
+watermark.Size=UDim2.fromOffset(220,28)
+label.Position=UDim2.fromOffset(9,0)
+label.Size=UDim2.new(1,-18,1,0)
+label.TextSize=15
+label.TextScaled=false
+label.TextWrapped=false
+label.TextStrokeTransparency=1
+label.TextYAlignment=Enum.TextYAlignment.Center
+for _,child in ipairs(watermark:GetDescendants()) do
+    if child:IsA("UIGradient") then
+        child.Enabled=false
+        local background=child.Parent
+        if background:IsA("Frame") then
+            background.BackgroundColor3=Library.MainColor
+            Library:AddToRegistry(background,{BackgroundColor3="MainColor"})
+        end
+    end
+end
+local function resizeWatermark()
+    watermark.Size=UDim2.fromOffset(math.max(120,math.ceil(label.TextBounds.X)+24),28)
+end
 Library:SetWatermarkVisibility(true)
-
--- Example of dynamically-updating watermark with common traits (fps and ping)
-local FrameTimer = tick()
-local FrameCounter = 0;
-local FPS = 60;
-
-local WatermarkConnection = game:GetService('RunService').RenderStepped:Connect(function()
-    FrameCounter += 1;
-
-    if (tick() - FrameTimer) >= 1 then
-        FPS = FrameCounter;
-        FrameTimer = tick();
-        FrameCounter = 0;
-    end;
-
-    local stats: any = game:GetService('Stats')
-    Library:SetWatermark(('Lean | %d fps | %d ms'):format(
-        math.floor(FPS),
-        math.floor(stats.Network.ServerStatsItem['Data Ping']:GetValue())
-    ));
-end);
-
-Library.KeybindFrame.Visible = true; -- todo: add a function for this
+Library.KeybindFrame.Visible=true
+Library.SetWatermark=function(_,text)
+    if label.Text~=text then label.Text=text end
+    resizeWatermark()
+end
+table.insert(Combat.connections,label:GetPropertyChangedSignal("TextBounds"):Connect(resizeWatermark))
+local elapsed,frames=0,0
+local stats: any=game:GetService("Stats")
+Library:SetWatermark("Lean | -- fps | -- ms")
+local WatermarkConnection=AimRunService.RenderStepped:Connect(function(dt)
+    elapsed+=dt;frames+=1
+    if elapsed<.5 then return end
+    local fps=math.floor(frames/math.max(elapsed,.001)+.5)
+    elapsed=0;frames=0
+    local ok,ping=pcall(function() return stats.Network.ServerStatsItem["Data Ping"]:GetValue() end)
+    local pingText=ok and type(ping)=="number" and string.format("%d",math.floor(ping+.5)) or "--"
+    Library:SetWatermark(string.format("Lean | %d fps | %s ms",fps,pingText))
+end)
 
 Library:OnUnload(function()
     WatermarkConnection:Disconnect()
@@ -3804,6 +3826,14 @@ FontGroup:AddDropdown('ui_font', { Text = 'UI Font', Values = Fonts.Names, Defau
 end)
 
 local MenuGroup = Tabs['UI Settings']:AddLeftGroupbox('Menu')
+MenuGroup:AddToggle('ui_keybinds_visible',{Text='Keybinds',Default=true}):OnChanged(function(v)
+    OverlaySettings.Keybinds=v
+    Library.KeybindFrame.Visible=v
+end)
+MenuGroup:AddToggle('ui_watermark_visible',{Text='Watermark',Default=true}):OnChanged(function(v)
+    OverlaySettings.Watermark=v
+    Library:SetWatermarkVisibility(v)
+end)
 
 -- I set NoUI so it does not show up in the keybinds menu
 MenuGroup:AddButton('Unload', function() Library:Unload() end)
