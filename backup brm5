@@ -2095,7 +2095,7 @@ do
     local M={active=true,hooks={},Speed=false,SpeedValue=24,Smoothing=false,Stamina=false,
         AutoSprint=false,AirStrafe=false,AirStrafeSpeed=24,BunnyHop=false,NoJumpDelay=true,
         AutoHeal=false,HealThreshold=75,HealItems={Vitamins=true,Bandage=true,Dressing=true},HealAvoid={},nextHeal=0,nextHealCheck=0,
-        Penalties=false,Survival=false,NoFallDamage=false,Fly=false,FlySpeed=40,Modifier=false,Multiplier=2,
+        Penalties=false,Survival=false,NoFallDamage=false,Fly=false,FlySpeed=40,Modifier=false,Multiplier=2,Noclip=false,
         speedState={},flyState={},modifierState={}}
     Combat.Movement=M
     local left=MovementPage:AddSection({Title="Movement",Side="Left"})
@@ -2136,6 +2136,7 @@ do
     flight:AddSlider({Text="Fly Speed",Flag="movement_fly_speed",Min=1,Max=150,Default=40,Rounding=1,Suffix=" studs/s",
         Callback=function(v) M.FlySpeed=v end})
     M.flyKey=flight:AddKeyPicker({Text="Fly Key",Flag="movement_fly_key",Default=Enum.KeyCode.H,Mode="Toggle",Callback=function() end})
+    toggle(flight,"Fly Noclip","Noclip")
     toggle(modifier,"Fly Modifier","Modifier")
     modifier:AddSlider({Text="Speed Multiplier",Flag="movement_fly_multiplier",Min=1,Max=5,Default=2,Rounding=.1,Suffix="x",
         Callback=function(v) M.Multiplier=v end})
@@ -2386,12 +2387,14 @@ do
             local speed=M.FlySpeed*(M.modifierActive and M.Multiplier or 1)
             local target=position+direction*speed*math.clamp(dt,0,.1)
             local grounded,normal=false,Vector3.yAxis
-            local oldPosition=ctrl._position
-            ctrl._position=position
-            local result=table.pack(pcall(ctrl._processNewPosition,ctrl,target))
-            ctrl._position=oldPosition
-            if not result[1] then error(result[2],0) end
-            target,grounded,normal=result[2],result[3],result[4]
+            if not M.Noclip then
+                local oldPosition=ctrl._position
+                ctrl._position=position
+                local result=table.pack(pcall(ctrl._processNewPosition,ctrl,target))
+                ctrl._position=oldPosition
+                if not result[1] then error(result[2],0) end
+                target,grounded,normal=result[2],result[3],result[4]
+            end
             ctrl._position=target;ctrl._correctedPosition=target;ctrl._groundHitbox=nil
             ctrl.VelocityGravity=0;ctrl.MoveSpeed=0;ctrl.IsGrounded=grounded;ctrl.SlopeNormal=normal
             ctrl.IsSliding=false;ctrl.IsSprinting=false;ctrl._lastMovement=Vector2.zero
