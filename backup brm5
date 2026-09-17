@@ -1,7 +1,9 @@
+
 local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
 
 local LibrarySourceUrl = 'https://raw.githubusercontent.com/vcqz23/settings/refs/heads/main/Linoria%20Src'
 local LibrarySource = LibrarySourceUrl ~= '' and game:HttpGet(LibrarySourceUrl) or readfile('LinoriaLib.luau')
+
 
 local previousLibrary = getgenv().LinoriaMenuLibrary
 if previousLibrary and not previousLibrary.Unloaded then previousLibrary:Unload() end
@@ -2133,7 +2135,7 @@ do
     toggle(flight,"Fly","Fly")
     flight:AddSlider({Text="Fly Speed",Flag="movement_fly_speed",Min=1,Max=150,Default=40,Rounding=1,Suffix=" studs/s",
         Callback=function(v) M.FlySpeed=v end})
-    M.flyKey=flight:AddKeyPicker({Text="Fly Key",Flag="movement_fly_key",Default="None",Mode="Toggle",Callback=function() end})
+    M.flyKey=flight:AddKeyPicker({Text="Fly Key",Flag="movement_fly_key",Default=Enum.KeyCode.H,Mode="Toggle",Callback=function() end})
     toggle(modifier,"Fly Modifier","Modifier")
     modifier:AddSlider({Text="Speed Multiplier",Flag="movement_fly_multiplier",Min=1,Max=5,Default=2,Rounding=.1,Suffix="x",
         Callback=function(v) M.Multiplier=v end})
@@ -2898,12 +2900,12 @@ GunTracerSection:AddSlider({Text="Width",Flag="gun_tracer_width",Min=.02,Max=.3,
 
 -- BRM5 adapters verified against place version 10120.
 do
-    local X: {[string]: any}={classes={},nextScan=0,shots=setmetatable({},{__mode="k"}),saved={},active=true}
+    local X: {[string]: any}={classes={},nextScan=0,saved={},active=true}
     local V: {[string]: any}={Speed=false,SpeedValue=80,Stability=false,FastStart=false,Fly=false,FlySpeed=60,Noclip=false,Bounce=false,bounceStates=setmetatable({},{__mode="k"}),keyState={}}
     local T={RPM=false,RPMValue=900,NoSpread=false,NoRecoil=false}
     local A: {[string]: any}={Headshot=false,Reach=false,Distance=8,Aura=false,Targets={Zombies=true,NPCs=true},keyState={},nextSwing=0,nextTargetScan=0}
     Combat.Extensions=X;Combat.Vehicle=V;Combat.Turret=T;Combat.Melee=A
-    Gun.InstantBullet=false;Gun.BulletMultiplier=1;Gun.RPM=false;Gun.RPMValue=900
+    Gun.RPM=false;Gun.RPMValue=900
     Gun.NoCameraShake=false;Gun.SightZoom=false;Gun.Zoom=2;Gun.NoEquipDelay=false;Gun.Debug=false
     local function actor()
         local s=Combat.Service();return s and s.Replicator and s.Replicator.LocalActor
@@ -2938,8 +2940,6 @@ do
         section:AddSlider({Text=text,Flag=flag,Min=min,Max=max,Default=default,Rounding=step,Suffix=suffix or "",
             Callback=function(v) state[key]=math.clamp(v,min,max) end})
     end
-    toggle(GunBallistics,"Instant Bullet",Gun,"InstantBullet","gun_instant_bullet")
-    slider(GunBallistics,"Bullet Speed",Gun,"BulletMultiplier","gun_bullet_multiplier",1,10,1,.1,"x")
     toggle(GunHandling,"RPM Modifier",Gun,"RPM","gun_rpm_enabled")
     slider(GunHandling,"RPM",Gun,"RPMValue","gun_rpm_value",60,3000,900,10," RPM")
     toggle(GunHandling,"No Equip Delay",Gun,"NoEquipDelay","gun_no_equip_delay")
@@ -3001,20 +3001,10 @@ do
         Gun.Hook(c,"Discharge",function(original) return function(w,...)
             if not localWeapon(w) then return original(w,...) end
             applyGun(w)
-            local thread=coroutine.running();local previous=X.shots[thread];X.shots[thread]=true
-            local r=table.pack(pcall(original,w,...));X.shots[thread]=previous
-            if not r[1] then error(r[2],0) end
-            return table.unpack(r,2,r.n)
+            return original(w,...)
         end end)
         Gun.Hook(c,"Equip",function(original) return function(w,...)
             applyGun(w);return original(w,...)
-        end end)
-    end
-    installers.BulletService=function(c)
-        Gun.Hook(c,"GetInfo",function(original) return function(self,...)
-            local r=table.pack(original(self,...))
-            if Gun.active and Gun.InstantBullet and X.shots[coroutine.running()] and type(r[1])=="number" then r[1]=r[1]*Gun.BulletMultiplier end
-            return table.unpack(r,1,r.n)
         end end)
     end
     installers.CharacterCamera=function(c)
@@ -3329,7 +3319,7 @@ do
             end
             X.hud.Enabled=true
             local tune=w and w._firearm and w._firearm.Tune
-            X.label.Text=string.format(" Gun: %s\n RPM: %s | Spread: %s\n Ammo: %s | Reloading: %s\n Bullet: %.1fx | %s",tostring(w and w.Name or "none"),tostring(tune and tune.RPM or "-"),tostring(tune and tune.Barrel_Spread or "-"),tostring(w and w._mag and w._mag.Capacity or "-"),tostring(w and w._reloading or false),Gun.InstantBullet and Gun.BulletMultiplier or 1,tostring(Gun.reloadError or X.error or "ready"))
+            X.label.Text=string.format(" Gun: %s\n RPM: %s | Spread: %s\n Ammo: %s | Reloading: %s\n %s",tostring(w and w.Name or "none"),tostring(tune and tune.RPM or "-"),tostring(tune and tune.Barrel_Spread or "-"),tostring(w and w._mag and w._mag.Capacity or "-"),tostring(w and w._reloading or false),tostring(Gun.reloadError or X.error or "ready"))
         elseif X.hud then X.hud.Enabled=false end
     end
     local oldDestroy=Combat.Destroy
