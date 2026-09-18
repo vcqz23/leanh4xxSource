@@ -48,9 +48,13 @@ ThemeManager.DefaultTheme = 'Clean'
 
 local Fonts: {[string]: any} = {
     UIName = 'Code', Face = Font.fromEnum(Library.Font), Cache = {}, Version = 0,
-    Names = { 'Code', 'Arial', 'Gotham', 'Source Sans', 'Roboto Mono', 'Ubuntu', 'Tahoma', 'Minecraftia', 'Verdana', 'Proggy Clean' },
+    Names = { 'Code', 'Arial', 'Gotham', 'Source Sans', 'Roboto Mono', 'Ubuntu', 'Tahoma', 'Minecraftia', 'Verdana', 'Proggy Clean', 'Builder Sans', 'Arimo', 'Roboto', 'Roboto Condensed', 'Gotham Medium', 'Gotham Bold', 'Nunito', 'Oswald', 'Source Sans Semibold' },
     Builtins = { Code = Enum.Font.Code, Arial = Enum.Font.Arial, Gotham = Enum.Font.Gotham,
-        ['Source Sans'] = Enum.Font.SourceSans, ['Roboto Mono'] = Enum.Font.RobotoMono, Ubuntu = Enum.Font.Ubuntu },
+        ['Source Sans'] = Enum.Font.SourceSans, ['Roboto Mono'] = Enum.Font.RobotoMono, Ubuntu = Enum.Font.Ubuntu,
+        ['Builder Sans']=Enum.Font.BuilderSans, Arimo=Enum.Font.Arimo, Roboto=Enum.Font.Roboto,
+        ['Roboto Condensed']=Enum.Font.RobotoCondensed, ['Gotham Medium']=Enum.Font.GothamMedium,
+        ['Gotham Bold']=Enum.Font.GothamBold, Nunito=Enum.Font.Nunito, Oswald=Enum.Font.Oswald,
+        ['Source Sans Semibold']=Enum.Font.SourceSansSemibold },
     Files = { Tahoma = 'Tahoma-Modern.ttf', Minecraftia = 'Minecraftia-Regular.ttf',
         Verdana = 'Verdana-Font.ttf', ['Proggy Clean'] = 'ProggyClean.ttf' },
 }
@@ -106,7 +110,7 @@ Library.Create = function(self, class, properties)
 end
 
 local Window = Library:CreateWindow({
-    Title = 'Lean v2.7.7 | BRM5 ',
+    Title = 'Lean | BRM5 ',
     Center = true,
     AutoShow = true,
     Size = UDim2.fromOffset(568, 660),
@@ -1021,7 +1025,8 @@ local Sense = (function()
     E.teamSettings.players.boxOutlineThickness=1
     E.chams.npc = {enabled=false, visibleColor=Color3.fromRGB(0,255,100),visibleIntensity=.85,
         occludedColor=white,occludedIntensity=.25}
-    E.advanced.npc = {nameType="Name",skeleton=false,skeletonColor=white}
+    E.advanced.npc = {nameType="Name",skeleton=false,skeletonColor=white,
+        skeletonThickness=1,skeletonOpacity=1,skeletonOutline=true,skeletonOutlineColor=black}
     E.chams.players=table.clone(E.chams.npc)
     E.advanced.players=table.clone(E.advanced.npc)
     for _,kind in ipairs({"zombies","corpses"}) do
@@ -1075,7 +1080,7 @@ local Sense = (function()
         if E.IsPlayer(actor) then return "players" end
     end
     local function newDrawing(o,key,class,props)
-        local d = (E.DrawingFactory or Drawing.new)(class)
+        local d = (o.DrawingFactory or E.DrawingFactory or Drawing.new)(class)
         d.Visible=false
         d.Transparency=1
         for k,v in pairs(props or {}) do d[k]=v end
@@ -1096,30 +1101,170 @@ local Sense = (function()
         for _,d in pairs(o.drawings) do d:Remove() end
         for _,d in pairs(o.adornments) do d:Destroy() end
     end
+    local skeletonPairs = {
+        {"UpperTorso","Head","Neck"},{"LowerTorso","UpperTorso","Waist"},
+        {"UpperTorso","LeftUpperArm","LeftShoulder"},{"LeftUpperArm","LeftLowerArm","LeftElbow"},
+        {"LeftLowerArm","LeftHand","LeftWrist"},
+        {"UpperTorso","RightUpperArm","RightShoulder"},{"RightUpperArm","RightLowerArm","RightElbow"},
+        {"RightLowerArm","RightHand","RightWrist"},
+        {"LowerTorso","LeftUpperLeg","LeftHip"},{"LeftUpperLeg","LeftLowerLeg","LeftKnee"},
+        {"LeftLowerLeg","LeftFoot","LeftAnkle"},
+        {"LowerTorso","RightUpperLeg","RightHip"},{"RightUpperLeg","RightLowerLeg","RightKnee"},
+        {"RightLowerLeg","RightFoot","RightAnkle"},
+        {"Torso","Head","Neck"},{"Torso","Left Arm","LeftShoulder"},
+        {"Torso","Right Arm","RightShoulder"},{"Torso","Left Leg","LeftHip"},{"Torso","Right Leg","RightHip"},
+    }
+    local function buildSkeleton(o,descendants)
+        local nodes,links,body,names,connections,known={},{},{},{},{},{}
+        local jointPairs={}
+        local function node(part,offset,bone)
+            nodes[#nodes+1]={part=part,offset=offset or Vector3.zero,bone=bone}
+            return #nodes
+        end
+        local function link(a,b)
+            if a~=b then links[#links+1]={a,b} end
+        end
+        for _,part in ipairs(o.parts) do
+            if part.Name~="Root" and part.Name~="HumanoidRootPart" then
+                local parent=part.Parent
+                local equipment=false
+                while parent and parent~=o.model do
+                    if parent:IsA("Accessory") or parent:IsA("Tool") then equipment=true;break end
+                    parent=parent.Parent
+                end
+                if not equipment then body[part]={};names[part.Name]=part end
+            end
+        end
+        local function mark(a,b,physicalJoint)
+            if not body[a] or not body[b] or a==b then return false end
+            known[a]=known[a] or {};known[b]=known[b] or {}
+            known[a][b]=true;known[b][a]=true
+            if physicalJoint then
+                jointPairs[a]=jointPairs[a] or {};jointPairs[a][b]=true
+            end
+            return true
+        end
+        local function connect(a,b,offsetA,offsetB,shared)
+            if not mark(a,b) then return end
+            connections[a]=connections[a] or {};connections[b]=connections[b] or {}
+            if connections[a][b] then return end
+            -- A motor's child pivot includes the animated pose. Both adjoining
+            -- segments share it, keeping elbows and knees joined while moving.
+            local nb=node(b,offsetB)
+            local na=shared and nb or node(a,offsetA)
+            connections[a][b]=na;connections[b][a]=nb
+            body[a][#body[a]+1]=na;body[b][#body[b]+1]=nb
+        end
+        for _,joint in ipairs(descendants) do
+            if joint:IsA("Motor6D") and mark(joint.Part0,joint.Part1,true) and joint.Enabled then
+                connect(joint.Part0,joint.Part1,joint.C0.Position,joint.C1.Position,true)
+            end
+        end
+        for _,joint in ipairs(descendants) do
+            if joint:IsA("BallSocketConstraint") or joint:IsA("HingeConstraint") then
+                local a,b=joint.Attachment0,joint.Attachment1
+                if a and b and mark(a.Parent,b.Parent,true) and joint.Enabled then
+                    -- Ragdoll attachments stay on their own limb; separated
+                    -- parts must not acquire a line spanning the gap.
+                    connect(a.Parent,b.Parent,a.Position,b.Position,false)
+                end
+            end
+        end
+        -- Remember physical joints that were removed, so a detached limb does
+        -- not get reconnected by the streamed-rig fallback on the next scan.
+        for a,neighbors in pairs(o.skeletonJointPairs or {}) do
+            for b in pairs(neighbors) do mark(a,b,true) end
+        end
+        o.skeletonJointPairs=jointPairs
+        -- Standard living rigs still work before their joints stream in.
+        local allowFallback=o.preview or Combat.IsAlive(o.actor)
+        for _,pair in ipairs(skeletonPairs) do
+            local a,b=names[pair[1]],names[pair[2]]
+            if allowFallback and a and b and not (known[a] and known[a][b]) then
+                local aa=a:FindFirstChild(pair[3].."RigAttachment")
+                local ab=b:FindFirstChild(pair[3].."RigAttachment")
+                local offsetB=ab and ab:IsA("Attachment") and ab.Position
+                    or Vector3.new(0,((b.Name=="Head" or pair[3]=="Waist") and -.5 or .5)*b.Size.Y,0)
+                local offsetA=aa and aa:IsA("Attachment") and aa.Position or Vector3.zero
+                connect(a,b,offsetA,offsetB,true)
+            end
+        end
+        local skinned={}
+        local boneNodes={}
+        for _,bone in ipairs(descendants) do
+            if bone:IsA("Bone") then
+                local part=bone.Parent
+                while part and part~=o.model and not part:IsA("BasePart") do part=part.Parent end
+                if body[part] then boneNodes[bone]=node(part,nil,bone) end
+            end
+        end
+        for bone,index in pairs(boneNodes) do
+            local parent=boneNodes[bone.Parent]
+            if parent then link(parent,index);skinned[nodes[index].part]=true end
+        end
+        for part,points in pairs(body) do
+            if skinned[part] or #points==0 then continue end
+            local central=part.Name=="Head" or part.Name:find("Torso")~=nil or #points>2
+            if central then
+                local center=node(part)
+                local joints=connections[part] or {}
+                local left=joints[names.LeftUpperArm or names["Left Arm"]]
+                local right=joints[names.RightUpperArm or names["Right Arm"]]
+                local neck=joints[names.Head]
+                if (part.Name=="Torso" or part.Name=="UpperTorso") and left and right then
+                    nodes[left].shoulderPart=part;nodes[right].shoulderPart=part
+                    -- One straight shoulder bar at the base of the neck. Its
+                    -- midpoint follows both animated pivots, so the spine does
+                    -- not fan out diagonally from the middle of the chest.
+                    nodes[#nodes+1]={midpointA=left,midpointB=right}
+                    local collar=#nodes
+                    link(left,right);link(center,collar)
+                    if neck then link(collar,neck) end
+                    for _,point in ipairs(points) do
+                        if point~=left and point~=right and point~=neck then link(center,point) end
+                    end
+                else
+                    for _,point in ipairs(points) do link(center,point) end
+                end
+            elseif #points==2 then
+                link(points[1],points[2])
+            else
+                local anchor=nodes[points[1]]
+                local localAnchor=anchor.part==part and anchor.offset
+                    or part.CFrame:PointToObjectSpace(anchor.part.CFrame:PointToWorldSpace(anchor.offset))
+                local tip=Vector3.new(0,(localAnchor.Y>=0 and -.45 or .45)*part.Size.Y,0)
+                if part.Name:find("Foot") then tip=Vector3.new(0,-part.Size.Y*.25,-part.Size.Z*.4) end
+                link(points[1],node(part,tip))
+            end
+        end
+        o.skeletonNodes=nodes;o.links=links
+        o.skeletonFrames={};o.skeletonWorld={};o.skeletonProjected={}
+        -- Streaming can shrink a rig. Release surplus Drawing objects now.
+        for key,d in pairs(o.drawings) do
+            local index=key:match("^bone(%d+)$") or key:match("^boneOutline(%d+)$")
+            if index and tonumber(index)>#links then d:Remove();o.drawings[key]=nil end
+        end
+    end
     local function rig(o)
         o.rigDirty=false
-        o.parts={}; o.links={}
+        o.parts={}
         local seen={}
-        for _,part in pairs(o.actor.Parts or {}) do
-            if typeof(part)=="Instance" and part:IsA("BasePart") and part:IsDescendantOf(o.model) then
-                o.parts[#o.parts+1]=part; seen[part]=true
+        local function add(part)
+            if typeof(part)=="Instance" and part:IsA("BasePart") and part:IsDescendantOf(o.model) and not seen[part] then
+                o.parts[#o.parts+1]=part;seen[part]=true
             end
         end
-        if #o.parts==0 then
-            for _,part in ipairs(o.model:GetChildren()) do
-                if part:IsA("BasePart") and part~=o.actor.RootPart then o.parts[#o.parts+1]=part;seen[part]=true end
-            end
+        for _,part in pairs(o.actor.Parts or {}) do add(part) end
+        -- Fill gaps in partially streamed R6/R15 Parts tables without equipment.
+        local names={}
+        for _,pair in ipairs(skeletonPairs) do names[pair[1]]=true;names[pair[2]]=true end
+        local useAll=#o.parts==0
+        for _,part in ipairs(o.model:GetChildren()) do
+            if names[part.Name] or (useAll and part~=o.actor.RootPart) then add(part) end
         end
-        for _,joint in ipairs(o.model:GetDescendants()) do
-            if joint:IsA("Motor6D") and seen[joint.Part0] and seen[joint.Part1] then
-                o.links[#o.links+1]={joint.Part0,joint.Part1}
-            elseif joint:IsA("BallSocketConstraint") or joint:IsA("HingeConstraint") then
-                local a,b=joint.Attachment0,joint.Attachment1
-                if a and b and seen[a.Parent] and seen[b.Parent] then o.links[#o.links+1]={a.Parent,b.Parent} end
-            elseif joint:IsA("Bone") and joint.Parent:IsA("Bone") then
-                o.links[#o.links+1]={joint.Parent,joint}
-            end
-        end
+        local descendants=o.model:GetDescendants()
+        buildSkeleton(o,descendants)
+        o.rigRefreshAt=os.clock()+2
     end
     function E.Sync(force)
         if not force and os.clock()<E.scanAt then return end
@@ -1136,7 +1281,7 @@ local Sense = (function()
                 if not o then
                     o={actor=actor,model=actor.Character,drawings={},adornments={},nextRay=0}
                     local function changed(instance)
-                        if (instance:IsA("BasePart") and instance.Parent==o.model)
+                        if instance:IsA("BasePart") or instance:IsA("Attachment")
                             or instance:IsA("Motor6D") or instance:IsA("Bone")
                             or instance:IsA("BallSocketConstraint") or instance:IsA("HingeConstraint") then
                             o.rigDirty=true
@@ -1147,7 +1292,7 @@ local Sense = (function()
                         o.model.DescendantRemoving:Connect(changed)
                     }
                     E.objects[actor]=o;rig(o)
-                elseif o.rigDirty or o.partsSource~=actor.Parts then rig(o) end
+                elseif o.rigDirty or o.partsSource~=actor.Parts or os.clock()>=(o.rigRefreshAt or 0) then rig(o) end
                 o.partsSource=actor.Parts
             end
         end
@@ -1173,30 +1318,34 @@ local Sense = (function()
     local function style(d,value,override)
         local c,a=color(value);d.Color=override or c;d.Transparency=a;d.Visible=a>0
     end
-    local function clipLine(a,b)
-        local v=workspace.CurrentCamera.ViewportSize
+    local function clipLine(a,b,viewport)
+        local v=viewport or workspace.CurrentCamera.ViewportSize
         local delta=b-a
         local lo,hi=0,1
-        for _,test in ipairs({{-delta.X,a.X},{delta.X,v.X-a.X},{-delta.Y,a.Y},{delta.Y,v.Y-a.Y}}) do
-            local p,q=test[1],test[2]
-            if math.abs(p)<1e-8 then if q<0 then return nil end
+        for axis=1,2 do
+            local start=axis==1 and a.X or a.Y
+            local step=axis==1 and delta.X or delta.Y
+            local limit=axis==1 and v.X or v.Y
+            if math.abs(step)<1e-8 then
+                if start<0 or start>limit then return nil end
             else
-                local r=q/p
-                if p<0 then lo=math.max(lo,r) else hi=math.min(hi,r) end
+                local enter,leave=-start/step,(limit-start)/step
+                if enter>leave then enter,leave=leave,enter end
+                lo=math.max(lo,enter);hi=math.min(hi,leave)
                 if lo>hi then return nil end
             end
         end
         return a+delta*lo,a+delta*hi
     end
     local function line(o,key,a,b,value,thickness,override)
-        a,b=clipLine(a,b)
+        a,b=clipLine(a,b,o.previewViewportSize)
         if not a then return nil end
         local d=drawing(o,key,"Line")
         d.From=a;d.To=b;d.Thickness=thickness or 1;style(d,value,override)
         return d
     end
     local function square(o,key,pos,size,value,filled,thickness,override)
-        local view=workspace.CurrentCamera.ViewportSize
+        local view=o.previewViewportSize or workspace.CurrentCamera.ViewportSize
         local corner=(pos+size):Min(view)
         pos=pos:Max(Vector2.zero)
         size=corner-pos
@@ -1208,7 +1357,7 @@ local Sense = (function()
     local function textAt(o,key,value,pos,col,outline,override)
         local view=workspace.CurrentCamera.ViewportSize
         if pos.X<0 or pos.Y<0 or pos.X>view.X or pos.Y>view.Y then return end
-        if E.sharedSettings.textFace then
+        if E.sharedSettings.textFace and not o.preview then
             if not E.textGui then
                 E.textGui = Instance.new('ScreenGui')
                 E.textGui.Name = 'LinoriaESPText'; E.textGui.IgnoreGuiInset = true
@@ -1243,8 +1392,63 @@ local Sense = (function()
         d.Font=E.sharedSettings.textFont;d.Center=true;d.Outline=outline;d.OutlineColor=black
         style(d,col,override)
     end
-    local function partPosition(p)
-        return p:IsA("Bone") and p.WorldPosition or p.Position
+    local function renderSkeleton(o,camera,adv,override)
+        local opacity=math.clamp(adv.skeletonOpacity or 1,0,1)
+        if opacity<=0 then return end
+        local thickness=math.clamp(adv.skeletonThickness or 1,1,4)
+        local tint={adv.skeletonColor,opacity}
+        local outline={adv.skeletonOutlineColor or black,opacity}
+        local frames,world,projected=o.skeletonFrames,o.skeletonWorld,o.skeletonProjected
+        table.clear(frames);table.clear(world);table.clear(projected)
+        for i,node in ipairs(o.skeletonNodes) do
+            local point
+            local part=node.part
+            if node.midpointA then
+                local a,b=world[node.midpointA],world[node.midpointB]
+                if a and b then point=(a+b)*.5 end
+            elseif part.Parent and (not node.bone or node.bone.Parent) then
+                local cf=frames[part]
+                if not cf then
+                    cf=o.preview and part.CFrame or Combat.PartCFrame(o.actor,part)
+                    frames[part]=cf
+                end
+                if node.bone then
+                    local animated=node.bone.TransformedWorldCFrame.Position
+                    point=cf:PointToWorldSpace(part.CFrame:PointToObjectSpace(animated))
+                else point=cf:PointToWorldSpace(node.offset) end
+            end
+            if point and node.shoulderPart and node.shoulderPart.Parent then
+                local torso=node.shoulderPart
+                local cf=frames[torso]
+                if not cf then
+                    cf=o.preview and torso.CFrame or Combat.PartCFrame(o.actor,torso)
+                    frames[torso]=cf
+                end
+                point-=cf.UpVector*(torso.Size.Y*.10)
+            end
+            if point then world[i]=point;projected[i]=camera:WorldToViewportPoint(point) end
+        end
+        local near=.05
+        for i,pair in ipairs(o.links) do
+            local a,b=pair[1],pair[2]
+            local p,q=projected[a],projected[b]
+            if not p or not q or (p.Z<near and q.Z<near) then continue end
+            -- Clip in world space before projecting the endpoint behind the
+            -- camera. Then clip to the viewport even when both ends are outside.
+            if p.Z<near then
+                p=camera:WorldToViewportPoint(world[a]:Lerp(world[b],(near-p.Z)/(q.Z-p.Z)))
+            elseif q.Z<near then
+                q=camera:WorldToViewportPoint(world[b]:Lerp(world[a],(near-q.Z)/(p.Z-q.Z)))
+            end
+            local from,to=clipLine(Vector2.new(p.X,p.Y),Vector2.new(q.X,q.Y),camera.ViewportSize)
+            if not from or (to-from).Magnitude<.25 then continue end
+            if adv.skeletonOutline~=false then
+                local d=drawing(o,"boneOutline"..i,"Line")
+                d.From=from;d.To=to;d.Thickness=thickness+2;d.ZIndex=4;style(d,outline)
+            end
+            local d=drawing(o,"bone"..i,"Line")
+            d.From=from;d.To=to;d.Thickness=thickness;d.ZIndex=5;style(d,tint,override)
+        end
     end
     local function bodyBounds(o,delta,position)
         local lo,hi
@@ -1319,7 +1523,8 @@ local Sense = (function()
     function E.RenderActor(o,camera,origin)
         hide(o)
         local a=o.actor
-        local kind=E.Kind(a)
+        local kind=o.preview and a.Kind or E.Kind(a)
+        if o.preview then o.previewViewportSize=camera.ViewportSize end
         if not kind then return end
         local t=E.teamSettings[kind]
         local enabledChams=E.chams[kind] and E.chams[kind].enabled
@@ -1327,10 +1532,10 @@ local Sense = (function()
         if not t.enabled or not (t.box or t.box3d or t.boxFill or t.name or t.weapon
             or t.distance or t.healthBar or t.healthText or t.tracer or t.offScreenArrow
             or enabledChams or enabledSkeleton) then return end
-        if kind=="players" and t.teamCheck and Combat.IsTeammate(a) then return end
+        if not o.preview and kind=="players" and t.teamCheck and Combat.IsTeammate(a) then return end
         -- Fail closed every frame, including owner changes and replacement models.
-        if not t.enabled or not E.Kind(a) or a.Character~=o.model or not o.model.Parent
-            or (kind~="corpses" and not Combat.IsAlive(a)) then return end
+        if not t.enabled or (not o.preview and not E.Kind(a)) or a.Character~=o.model or not o.model.Parent
+            or (not o.preview and kind~="corpses" and not Combat.IsAlive(a)) then return end
         local root=a.RootPart
         local position=a.Position or (root and root.Position)
         if kind=="corpses" then
@@ -1343,7 +1548,7 @@ local Sense = (function()
         local shared=E.sharedSettings
         if t.limitDistance and dist>t.maxDistance then return end
         local adv=E.advanced[kind]
-        local override=shared.teamBasedColor and E.TeamColor(a) or nil
+        local override=shared.teamBasedColor and (o.preview and a.PreviewTeamColor or E.TeamColor(a)) or nil
         local delta=root and position-root.Position or Vector3.zero
         local view=camera.ViewportSize
         local sp,onScreen=camera:WorldToViewportPoint(position)
@@ -1359,7 +1564,10 @@ local Sense = (function()
             local d=drawing(o,"arrow","Triangle")
             d.PointA=tip;d.PointB=back+side;d.PointC=back-side;d.Filled=true;style(d,t.offScreenArrowColor,override)
         end
-        if sp.Z<=.05 then return end
+        if sp.Z<=.05 then
+            if adv.skeleton then renderSkeleton(o,camera,adv,override) end
+            return
+        end
         local needsBox=t.box or t.box3d or t.boxFill or t.name or t.weapon or t.distance or t.healthBar or t.healthText or t.tracer
         local min,max,corners
         if needsBox then
@@ -1375,7 +1583,7 @@ local Sense = (function()
             end
         end
         local boxVisible=min and max and max.X>=0 and max.Y>=0 and min.X<=view.X and min.Y<=view.Y
-        if onScreen or boxVisible then chams(o,camera,delta,position,override) end
+        if not o.preview and (onScreen or boxVisible) then chams(o,camera,delta,position,override) end
         if boxVisible then
             local size=max-min;local cx=(min.X+max.X)*.5
             if t.boxFill then square(o,"fill",min,size,t.boxFillColor,true,1,override) end
@@ -1406,14 +1614,14 @@ local Sense = (function()
                 if kind=="players" and adv.nameType=="Display Name" then label=a.Owner.DisplayName
                 elseif adv.nameType=="Display Name" then
                     label=a.DisplayName or (a.OwnerName~="???" and a.OwnerName) or (a.Zombie and "Zombie" or "NPC")
-                    label=tostring(label).." ["..tostring(a.UID):sub(1,6).."]"
+                    if not o.preview then label=tostring(label).." ["..tostring(a.UID):sub(1,6).."]" end
                 end
                 if kind=="zombies" then label="Zombie"
                 elseif kind=="corpses" then label="Corpse: "..(a.Zombie and "Zombie" or (E.IsPlayer(a) and a.Owner.Name or "NPC")) end
                 textAt(o,"name",label,Vector2.new(cx,min.Y-shared.textSize-3),t.nameColor,t.nameOutline,override)
             end
             local textY=max.Y+2
-            if kind=="players" and t.weapon then textAt(o,"weapon",E.Weapon(a),Vector2.new(cx,textY),t.weaponColor,t.weaponOutline,override);textY+=shared.textSize+2 end
+            if kind=="players" and t.weapon then textAt(o,"weapon",o.preview and a.PreviewWeapon or E.Weapon(a),Vector2.new(cx,textY),t.weaponColor,t.weaponOutline,override);textY+=shared.textSize+2 end
             if t.distance then textAt(o,"distance",string.format("%.0f studs",dist),Vector2.new(cx,textY),t.distanceColor,t.distanceOutline,override) end
             if t.tracer then
                 local y=t.tracerOrigin=="Top" and 0 or (t.tracerOrigin=="Middle" and view.Y*.5 or view.Y)
@@ -1422,17 +1630,7 @@ local Sense = (function()
                 line(o,"tracer",from,to,t.tracerColor,1,override)
             end
         end
-        if adv.skeleton then
-            for i,pair in ipairs(o.links) do
-                if pair[1].Parent and pair[2].Parent then
-                    local p,po=camera:WorldToViewportPoint(partPosition(pair[1])+delta)
-                    local q,qo=camera:WorldToViewportPoint(partPosition(pair[2])+delta)
-                    if p.Z>.05 and q.Z>.05 and (po or qo) then
-                        line(o,"bone"..i,Vector2.new(p.X,p.Y),Vector2.new(q.X,q.Y),adv.skeletonColor,1,override)
-                    end
-                end
-            end
-        end
+        if adv.skeleton then renderSkeleton(o,camera,adv,override) end
     end
     function E.Render(cameraOverride)
         if E.Paused then return end
@@ -1462,6 +1660,12 @@ local Sense = (function()
         if E.textGui then E.textGui:Destroy(); E.textGui=nil end
         E._hasLoaded=false
     end
+    function E.CreatePreviewObject(actor,factory)
+        local o:any={actor=actor,model=actor.Character,drawings={},adornments={},nextRay=0,preview=true,DrawingFactory=factory}
+        rig(o)
+        return o
+    end
+    E.DestroyPreviewObject=destroy
     return E
 end)()
 
@@ -1792,7 +1996,26 @@ local function buildTeamPage(page, team)
         Text = "Skeleton Color",
         Flag = prefix .. "skeleton_color",
         Default = adv.skeletonColor,
-        Callback = function(color) adv.skeletonColor = color end
+        Transparency = adv.skeletonOpacity,
+        Callback = function(color, opacity)
+            adv.skeletonColor = color
+            adv.skeletonOpacity = opacity
+        end
+    })
+    Skeleton:AddSlider({
+        Text = "Thickness", Flag = prefix .. "skeleton_thickness",
+        Min = 1, Max = 4, Default = adv.skeletonThickness, Suffix = " px",
+        Callback = function(v) adv.skeletonThickness = v end
+    })
+    Skeleton:AddToggle({
+        Text = "Skeleton Outline", Flag = prefix .. "skeleton_outline",
+        Default = adv.skeletonOutline,
+        Callback = function(v) adv.skeletonOutline = v end
+    })
+    Skeleton:AddColorPicker({
+        Text = "Outline Color", Flag = prefix .. "skeleton_outline_color",
+        Default = adv.skeletonOutlineColor,
+        Callback = function(color) adv.skeletonOutlineColor = color end
     })
 
     -- ═══ RIGHT: Text ═══════════════════════════════════════════
@@ -1989,10 +2212,12 @@ SharedLeft:AddSlider({
 
 -- Roblox Drawing font indices
 local ESP_FONT_MAP = { ["UI"] = 0, ["System"] = 1, ["Plex"] = 2, ["Monospace"] = 3 }
+local espFonts={"UI","System","Plex","Monospace"}
+for _,name in ipairs(Fonts.Names) do espFonts[#espFonts+1]=name end
 SharedLeft:AddDropdown({
     Text = "Font",
     Flag = "esp_text_font",
-    Options = {"UI", "System", "Plex", "Monospace", "Tahoma", "Minecraftia", "Verdana", "Proggy Clean", "Arial", "Gotham", "Source Sans", "Roboto Mono", "Ubuntu"},
+    Options = espFonts,
     Default = "Plex",
     Callback = function(v)
         local previous = Sense.sharedSettings.fontName or 'Plex'
@@ -2018,6 +2243,414 @@ SharedLeft:AddSlider({Text="Box Outline Thickness",Flag="npc_box_outline_thickne
     Callback=function(v) Sense.teamSettings.npc.boxOutlineThickness=v;Sense.teamSettings.players.boxOutlineThickness=v end})
 
 addSubtabs('Visuals', visualPages)
+-- Visuals 3D Preview: Players, NPCs and Zombies.
+do
+-- Installs an isolated, category-aware preview into an existing Linoria menu.
+local installPreview=function(Context)
+    local Library, Window, Sense = Context.Library, Context.Window, Context.Sense
+    local Player, Input, RunService = Context.Player, Context.Input, Context.RunService
+    local pages = Context.Pages
+    local labels = {players="Players", npc="NPCs", zombies="Zombies"}
+    local bodyNames = {Head=true,UpperTorso=true,LowerTorso=true,Torso=true,
+        LeftUpperArm=true,LeftLowerArm=true,LeftHand=true,RightUpperArm=true,RightLowerArm=true,RightHand=true,
+        LeftUpperLeg=true,LeftLowerLeg=true,LeftFoot=true,RightUpperLeg=true,RightLowerLeg=true,RightFoot=true,
+        ["Left Arm"]=true,["Right Arm"]=true,["Left Leg"]=true,["Right Leg"]=true}
+    local Preview:any = {enabled={players=true,npc=true,zombies=true}, sources={}, views={}, chams={},
+        nextFrame=0,nextSourceCheck=0,dragging=false,connections={},destroyed=false,random=Random.new()}
+
+    local function connect(signal, callback)
+        local connection=signal:Connect(callback)
+        Preview.connections[#Preview.connections+1]=connection
+        return connection
+    end
+    local function validModel(model)
+        return typeof(model)=="Instance" and model:IsA("Model") and model.Parent~=nil
+    end
+    local function visiblePage()
+        if Preview.destroyed or Library.Unloaded or not Window.Holder.Visible then return nil end
+        for kind,page in pairs(pages) do
+            if page.Active and Preview.enabled[kind] then
+                local parent=page.Button and page.Button.Parent
+                local visible=parent~=nil
+                while parent and parent~=Window.Holder do
+                    if parent:IsA("GuiObject") and not parent.Visible then visible=false;break end
+                    parent=parent.Parent
+                end
+                if visible then return kind end
+            end
+        end
+        return nil
+    end
+    function Preview.Resolve(kind, force)
+        local service=Sense.Service()
+        local replicator=service and service.Replicator
+        local previous=Preview.sources[kind]
+        if kind=="players" then
+            local actor=replicator and replicator.LocalActor
+            local model=actor and actor.Character
+            if not validModel(model) then model=Player.Character;actor=nil end
+            return validModel(model) and {model=model,actor=actor,label=Player.DisplayName,
+                detail="Your character",revision=#model:GetChildren()} or nil
+        end
+        local function eligible(actor)
+            if type(actor)~="table" or actor.Owner~=nil or actor.IsLocalPlayer then return false end
+            if (not not actor.Zombie)~=(kind=="zombies") then return false end
+            return validModel(actor.Character) and Context.IsAlive(actor)
+        end
+        local registry=replicator and replicator.Actors or {}
+        if not force and previous and eligible(previous.actor) and previous.actor.Character==previous.model
+            and previous.actor.UID and registry[previous.actor.UID]==previous.actor then return previous end
+        local candidates={}
+        for _,actor in pairs(registry) do
+            if eligible(actor) and (not force or not previous or actor.Character~=previous.model) then
+                candidates[#candidates+1]=actor
+            end
+        end
+        if #candidates>0 then
+            local actor=candidates[Preview.random:NextInteger(1,#candidates)]
+            local name=actor.DisplayName or (actor.OwnerName~="???" and actor.OwnerName) or actor.Character.Name
+            return {model=actor.Character,actor=actor,label=kind=="zombies" and "Zombie" or tostring(name),
+                detail=kind=="zombies" and "Live zombie · snapshot" or "Random NPC · snapshot"}
+        end
+        if previous and eligible(previous.actor) then return previous end
+        if kind=="zombies" then
+            local root=game:GetService("ReplicatedStorage")
+            for _,name in ipairs({"Assets","Models","Character","Zombie"}) do
+                root=root and root:FindFirstChild(name)
+            end
+            if validModel(root) then return {model=root,label="Zombie",detail="Game zombie model"} end
+        end
+        return nil
+    end
+    function Preview.ClearModel()
+        if Preview.object then Sense.DestroyPreviewObject(Preview.object);Preview.object=nil end
+        if Preview.world then Preview.world:ClearAllChildren() end
+        Preview.model=nil;Preview.actor=nil;Preview.source=nil
+        table.clear(Preview.chams)
+    end
+    local function cloneModel(source)
+        local changed={}
+        local ok,result=pcall(function()
+            local objects=source:GetDescendants();objects[#objects+1]=source
+            for _,object in ipairs(objects) do
+                if not object.Archivable then changed[#changed+1]=object;object.Archivable=true end
+            end
+            return source:Clone()
+        end)
+        for _,object in ipairs(changed) do pcall(function() object.Archivable=false end) end
+        if ok then return result end
+        return nil
+    end
+    function Preview.Drawing(class)
+        local properties:any={Visible=false,Transparency=1,Color=Color3.new(1,1,1)}
+        local object:any={}
+        local frame:any=Instance.new(class=="Text" and "TextLabel" or "Frame")
+        frame.Name=class;frame.BorderSizePixel=0;frame.Active=false;frame.Visible=false
+        frame.ZIndex=14;frame.Parent=Preview.overlay
+        local border
+        if class=="Text" then
+            frame.BackgroundTransparency=1;frame.RichText=false
+            frame.TextXAlignment=Enum.TextXAlignment.Center;frame.TextYAlignment=Enum.TextYAlignment.Top
+        elseif class=="Square" then
+            border=Instance.new("UIStroke");border.ApplyStrokeMode=Enum.ApplyStrokeMode.Border;border.Parent=frame
+        end
+        function object:Remove() frame:Destroy() end
+        function object:Flush()
+            frame.Visible=properties.Visible==true
+            if not frame.Visible then return end
+            frame.ZIndex=14+(properties.ZIndex or 0)
+            local opacity=math.clamp(properties.Transparency or 1,0,1)
+            local color=properties.Color
+            if class=="Text" then
+                frame.FontFace=Sense.sharedSettings.textFace or Font.fromEnum(
+                    ({Library.Font,Enum.Font.Arial,Enum.Font.Gotham,Enum.Font.Code})[(properties.Font or 2)+1] or Library.Font)
+                frame.Text=tostring(properties.Text or "");frame.TextSize=properties.Size or 13
+                frame.TextColor3=color;frame.TextTransparency=1-opacity
+                frame.TextStrokeColor3=properties.OutlineColor or Color3.new(0,0,0)
+                frame.TextStrokeTransparency=properties.Outline and 1-opacity or 1
+                frame.AnchorPoint=Vector2.new(properties.Center and .5 or 0,0)
+                frame.Size=UDim2.fromOffset(500,(properties.Size or 13)*2)
+                frame.Position=UDim2.fromOffset(properties.Position.X,properties.Position.Y)
+            elseif class=="Line" then
+                local delta=properties.To-properties.From;local midpoint=(properties.From+properties.To)*.5
+                frame.AnchorPoint=Vector2.new(.5,.5);frame.Position=UDim2.fromOffset(midpoint.X,midpoint.Y)
+                frame.Size=UDim2.fromOffset(delta.Magnitude,properties.Thickness or 1)
+                frame.Rotation=math.deg(math.atan2(delta.Y,delta.X))
+                frame.BackgroundColor3=color;frame.BackgroundTransparency=1-opacity
+            elseif class=="Square" then
+                frame.Position=UDim2.fromOffset(properties.Position.X,properties.Position.Y)
+                frame.Size=UDim2.fromOffset(properties.Size.X,properties.Size.Y)
+                frame.BackgroundColor3=color;frame.BackgroundTransparency=properties.Filled and 1-opacity or 1
+                border.Enabled=not properties.Filled;border.Color=color;border.Transparency=1-opacity
+                border.Thickness=properties.Thickness or 1
+            else frame.Visible=false end
+        end
+        return setmetatable(object,{__index=function(_,key) return properties[key] end,
+            __newindex=function(_,key,value) properties[key]=value end})
+    end
+    function Preview.BuildModel(kind, source)
+        Preview.ClearModel()
+        if not source then return false end
+        local model=cloneModel(source.model)
+        if not model then return false end
+        -- Sanitize before parenting: the copied appearance is entirely inert.
+        for _,object in ipairs(model:GetDescendants()) do
+            if object:IsA("LuaSourceContainer") or object:IsA("Sound") or object:IsA("LayerCollector")
+                or object:IsA("ParticleEmitter") or object:IsA("Beam") or object:IsA("Trail")
+                or object:IsA("Highlight") or object:IsA("ForceField") or object:IsA("Animator")
+                or object:IsA("Light") or object:IsA("ProximityPrompt") then object:Destroy()
+            elseif object:IsA("BasePart") then
+                object.Anchored=true;object.CanCollide=false;object.CanTouch=false;object.CanQuery=false
+                object.CastShadow=false;object.LocalTransparencyModifier=0
+                object.AssemblyLinearVelocity=Vector3.zero;object.AssemblyAngularVelocity=Vector3.zero
+            end
+        end
+        local rootName=source.actor and source.actor.RootPart and source.actor.RootPart.Name
+        local root=(rootName and model:FindFirstChild(rootName,true)) or model:FindFirstChild("Root")
+            or model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart or model:FindFirstChild("UpperTorso")
+        if not root or not root:IsA("BasePart") then model:Destroy();return false end
+        local body,joints={},{}
+        for _,part in ipairs(model:GetDescendants()) do
+            if part:IsA("BasePart") and bodyNames[part.Name] and part.Parent==model then body[part.Name]=part end
+            if part:IsA("Motor6D") or part:IsA("Weld") then joints[#joints+1]=part end
+        end
+        -- Put the root at the origin, then resolve the stored neutral pose and equipment welds.
+        local transform=root.CFrame:Inverse()
+        for _,part in ipairs(model:GetDescendants()) do
+            if part:IsA("BasePart") then part.CFrame=transform*part.CFrame end
+        end
+        local placed={[root]=true}
+        for _=1,24 do
+            local changed=false
+            for _,joint in ipairs(joints) do
+                local a,b=joint.Part0,joint.Part1
+                if a and b and a:IsDescendantOf(model) and b:IsDescendantOf(model) then
+                    if placed[a] and not placed[b] then
+                        b.CFrame=a.CFrame*joint.C0*joint.C1:Inverse();placed[b]=true;changed=true
+                    elseif placed[b] and not placed[a] then
+                        a.CFrame=b.CFrame*joint.C1*joint.C0:Inverse();placed[a]=true;changed=true
+                    end
+                end
+            end
+            if not changed then break end
+        end
+        local humanoid=model:FindFirstChildOfClass("Humanoid")
+        if humanoid then humanoid.DisplayDistanceType=Enum.HumanoidDisplayDistanceType.None end
+        if root.Name=="Root" or root.Name=="HumanoidRootPart" then root.Transparency=1 end
+        model.PrimaryPart=root;model.Name=source.label;model.Parent=Preview.world
+        local sourceActor=source.actor
+        local maxHealth=sourceActor and type(sourceActor.MaxHealth)=="number" and sourceActor.MaxHealth or 100
+        local health=sourceActor and type(sourceActor.Health)=="number" and sourceActor.Health or maxHealth*.75
+        local actor={Character=model,RootPart=root,Position=root.Position,Kind=kind,Health=health,MaxHealth=maxHealth,
+            Owner=kind=="players" and {Name=Player.Name,DisplayName=Player.DisplayName,Neutral=Player.Neutral} or nil,
+            DisplayName=source.label,OwnerName=source.label,UID=sourceActor and sourceActor.UID or "preview",
+            Parts=body,Zombie=kind=="zombies",PreviewWeapon=sourceActor and Sense.Weapon(sourceActor) or "Unarmed",
+            PreviewTeamColor=sourceActor and Sense.TeamColor(sourceActor) or Sense.sharedSettings.neutralColor}
+        Preview.model=model;Preview.actor=actor;Preview.source=source
+        Preview.object=Sense.CreatePreviewObject(actor,Preview.Drawing)
+        -- Capture joint offsets before removing inert clone constraints. The
+        -- preview and live skeleton now use exactly the same topology builder.
+        for _,joint in ipairs(joints) do joint:Destroy() end
+        for _,object in ipairs(model:GetDescendants()) do
+            if object:IsA("Constraint") or object:IsA("BodyMover") then object:Destroy() end
+        end
+        for _,part in pairs(body) do
+            if part~=root and part.Transparency<1 then
+                local overlay=part:Clone()
+                for _,child in ipairs(overlay:GetChildren()) do
+                    if child:IsA("SpecialMesh") then child.TextureId="" else child:Destroy() end
+                end
+                if overlay:IsA("MeshPart") then overlay.TextureID="" end
+                overlay.Name="PreviewChams";overlay.Size=part.Size+Vector3.one*.012
+                overlay.Material=Enum.Material.SmoothPlastic;overlay.Transparency=1;overlay.Parent=Preview.world
+                Preview.chams[#Preview.chams+1]=overlay
+            end
+        end
+        local bounds,size=model:GetBoundingBox()
+        Preview.focus=bounds.Position;Preview.radius=math.max(size.Magnitude*.5,1)
+        Preview.LastError=nil
+        return true
+    end
+    local function label(parent,text,position,size,textSize)
+        local object=Library:Create("TextLabel",{BackgroundTransparency=1,Text=text,Font=Library.Font,
+            TextSize=textSize,TextColor3=Library.FontColor,TextXAlignment=Enum.TextXAlignment.Left,
+            TextTruncate=Enum.TextTruncate.AtEnd,Position=position,Size=size,ZIndex=12,Parent=parent})
+        Library:AddToRegistry(object,{TextColor3="FontColor"})
+        return object
+    end
+    local function button(parent,text,position,size,callback)
+        local object=Library:Create("TextButton",{Text=text,Font=Library.Font,TextSize=12,
+            TextColor3=Library.FontColor,BackgroundColor3=Library.MainColor,BorderSizePixel=0,
+            Position=position,Size=size,ZIndex=15,Parent=parent})
+        Library:AddToRegistry(object,{TextColor3="FontColor",BackgroundColor3="MainColor"})
+        Library:Create("UICorner",{CornerRadius=UDim.new(0,3),Parent=object})
+        connect(object.MouseButton1Click,callback)
+        return object
+    end
+    function Preview.EnsureGui()
+        if Preview.panel then return end
+        local panel=Library:Create("Frame",{Name="Visuals3DPreview",BorderSizePixel=0,
+            BackgroundColor3=Library.BackgroundColor,Size=UDim2.fromOffset(264,430),Visible=false,
+            ClipsDescendants=true,ZIndex=10,Parent=Window.Holder})
+        Library:AddToRegistry(panel,{BackgroundColor3="BackgroundColor"})
+        local border=Library:Create("UIStroke",{Color=Library.OutlineColor,Thickness=1,Parent=panel})
+        Library:AddToRegistry(border,{Color="OutlineColor"})
+        local accent=Library:Create("Frame",{BorderSizePixel=0,BackgroundColor3=Library.AccentColor,
+            Size=UDim2.new(1,0,0,2),ZIndex=11,Parent=panel})
+        Library:AddToRegistry(accent,{BackgroundColor3="AccentColor"})
+        Preview.title=label(panel,"Visuals 3D Preview",UDim2.fromOffset(12,8),UDim2.new(1,-24,0,20),14)
+        Preview.subtitle=label(panel,"",UDim2.fromOffset(12,31),UDim2.new(1,-24,0,17),12)
+        Preview.subtitle.TextTransparency=.25
+        local viewport=Instance.new("ViewportFrame")
+        viewport.Name="Model";viewport.BackgroundTransparency=1;viewport.BorderSizePixel=0
+        viewport.Position=UDim2.fromOffset(8,55);viewport.Size=UDim2.new(1,-16,1,-127)
+        viewport.Ambient=Color3.fromRGB(165,169,180);viewport.LightColor=Color3.fromRGB(245,237,221)
+        viewport.LightDirection=Vector3.new(-1,-.7,-1);viewport.ZIndex=11;viewport.Active=true;viewport.Parent=panel
+        local world=Instance.new("WorldModel");world.Parent=viewport
+        local camera=Instance.new("Camera");camera.FieldOfView=30;camera.Parent=viewport;viewport.CurrentCamera=camera
+        local overlay=Instance.new("Frame");overlay.Name="Overlay";overlay.BackgroundTransparency=1
+        overlay.Size=UDim2.fromScale(1,1);overlay.ClipsDescendants=true;overlay.ZIndex=12;overlay.Parent=viewport
+        Preview.empty=label(panel,"Waiting for a model…",UDim2.new(0,18,.5,-24),UDim2.new(1,-36,0,48),13)
+        Preview.empty.TextWrapped=true;Preview.empty.TextXAlignment=Enum.TextXAlignment.Center
+        Preview.status=label(panel,"",UDim2.new(0,12,1,-68),UDim2.new(1,-24,0,17),11)
+        Preview.hint=label(panel,"Drag to rotate · Scroll to zoom",UDim2.new(0,12,1,-49),UDim2.new(1,-24,0,15),11)
+        Preview.hint.TextTransparency=.35
+        Preview.panel=panel;Preview.viewport=viewport;Preview.world=world;Preview.camera=camera;Preview.overlay=overlay
+        Preview.reset=button(panel,"Reset view",UDim2.new(0,12,1,-29),UDim2.new(.5,-18,0,22),function()
+            if Preview.kind then Preview.views[Preview.kind]={yaw=.3,pitch=.02,zoom=1} end
+        end)
+        Preview.shuffle=button(panel,"Another NPC",UDim2.new(.5,6,1,-29),UDim2.new(.5,-18,0,22),function()
+            if Preview.kind then Preview.Refresh(Preview.kind,true) end
+        end)
+        connect(viewport.InputBegan,function(input)
+            if input.UserInputType==Enum.UserInputType.MouseButton1 and Preview.panel.Visible then
+                Preview.dragging=true;Preview.lastMouse=Input:GetMouseLocation()
+            end
+        end)
+        connect(viewport.InputChanged,function(input)
+            if input.UserInputType==Enum.UserInputType.MouseWheel and Preview.kind then
+                local view=Preview.views[Preview.kind]
+                view.zoom=math.clamp(view.zoom-input.Position.Z*.1,.65,1.8)
+            end
+        end)
+        connect(Input.InputEnded,function(input)
+            if input.UserInputType==Enum.UserInputType.MouseButton1 then Preview.dragging=false end
+        end)
+        connect(Input.WindowFocusReleased,function() Preview.dragging=false end)
+    end
+    function Preview.Refresh(kind,force)
+        local source=Preview.Resolve(kind,force)
+        local old=Preview.source
+        Preview.sources[kind]=source
+        if force or not Preview.object or not source or not old or old.model~=source.model or old.revision~=source.revision then
+            local ok=Preview.BuildModel(kind,source)
+            Preview.empty.Visible=not ok
+            Preview.empty.Text=source and "Model could not be copied. Retrying…" or
+                (kind=="players" and "Waiting for your character…" or "No "..labels[kind].." model available. Retrying…")
+        end
+        Preview.subtitle.Text=source and (labels[kind].." · "..source.label) or labels[kind]
+        Preview.shuffle.Visible=kind~="players"
+        Preview.shuffle.Text=kind=="npc" and "Another NPC" or
+            (source and source.actor and "Another zombie" or "Refresh model")
+        Preview.nextSourceCheck=os.clock()+2
+    end
+    function Preview.Layout()
+        local camera=workspace.CurrentCamera
+        if not camera then return end
+        local screen=camera.ViewportSize
+        local pos,size=Window.Holder.AbsolutePosition,Window.Holder.AbsoluteSize
+        local width=math.min(264,math.max(120,screen.X-16))
+        local height=math.min(430,math.max(220,screen.Y-16),math.max(220,size.Y))
+        local x=pos.X+size.X+12
+        if x+width>screen.X-8 then x=pos.X-width-12 end
+        x=math.clamp(x,8,math.max(8,screen.X-width-8))
+        local y=math.clamp(pos.Y,8,math.max(8,screen.Y-height-8))
+        Preview.panel.Size=UDim2.fromOffset(width,height)
+        Preview.panel.Position=UDim2.fromOffset(x-pos.X,y-pos.Y)
+    end
+    function Preview.Step(now)
+        local kind=visiblePage()
+        if not kind then
+            if Preview.panel then Preview.panel.Visible=false end
+            Preview.dragging=false
+            return
+        end
+        Preview.EnsureGui()
+        local switched=Preview.kind~=kind
+        if not switched and now<Preview.nextFrame then return end
+        Preview.nextFrame=now+1/30
+        Preview.panel.Visible=true;Preview.Layout()
+        if switched then
+            Preview.kind=kind;Preview.dragging=false
+            Preview.views[kind]=Preview.views[kind] or {yaw=.3,pitch=.02,zoom=1}
+            Preview.ClearModel();Preview.Refresh(kind,false)
+        elseif now>=Preview.nextSourceCheck then Preview.Refresh(kind,false) end
+        if not Preview.object then return end
+        local viewState=Preview.views[kind]
+        if Preview.dragging then
+            local mouse=Input:GetMouseLocation();local delta=mouse-Preview.lastMouse;Preview.lastMouse=mouse
+            viewState.yaw-=delta.X*.009;viewState.pitch=math.clamp(viewState.pitch+delta.Y*.006,-.65,.65)
+        end
+        local view=Preview.viewport.AbsoluteSize
+        if view.X<1 or view.Y<1 then return end
+        local tangent=math.tan(math.rad(Preview.camera.FieldOfView*.5))
+        local limitingHalfFov=math.atan(tangent*math.min(1,view.X/view.Y))
+        local distance=Preview.radius/math.sin(limitingHalfFov)*1.12*viewState.zoom
+        local yaw,pitch=viewState.yaw,viewState.pitch
+        local offset=Vector3.new(math.sin(yaw)*math.cos(pitch),math.sin(pitch),-math.cos(yaw)*math.cos(pitch))*distance
+        Preview.camera.CFrame=CFrame.lookAt(Preview.focus+offset,Preview.focus)
+        local camera:any={CFrame=Preview.camera.CFrame,ViewportSize=view}
+        function camera:WorldToViewportPoint(point)
+            local relative=self.CFrame:PointToObjectSpace(point);local depth=-relative.Z
+            local focal=view.Y/(2*tangent)
+            local x=view.X*.5+relative.X*focal/math.max(.001,depth)
+            local y=view.Y*.5-relative.Y*focal/math.max(.001,depth)
+            return Vector3.new(x,y,depth),depth>0 and x>=0 and x<=view.X and y>=0 and y<=view.Y
+        end
+        local settings=Sense.teamSettings[kind]
+        local sampleDistance=math.min(40,settings.maxDistance or 40)
+        local origin=Preview.actor.Position-Vector3.new(0,0,sampleDistance)
+        Sense.RenderActor(Preview.object,camera,origin)
+        for _,drawing in pairs(Preview.object.drawings) do drawing:Flush() end
+        local chams=Sense.chams[kind]
+        for _,part in ipairs(Preview.chams) do
+            part.Color=Sense.sharedSettings.teamBasedColor and Preview.actor.PreviewTeamColor or chams.visibleColor
+            part.Transparency=settings.enabled and chams.enabled and 1-chams.visibleIntensity or 1
+        end
+        Preview.status.Text=(Preview.source and Preview.source.detail or "")..(settings.enabled and "" or " · ESP off")
+    end
+    function Preview.Destroy()
+        if Preview.destroyed then return end
+        Preview.destroyed=true
+        for _,connection in ipairs(Preview.connections) do connection:Disconnect() end
+        table.clear(Preview.connections)
+        Preview.ClearModel()
+        if Preview.panel then Preview.panel:Destroy();Preview.panel=nil end
+        table.clear(Preview.sources);table.clear(Preview.views)
+    end
+    for kind,page in pairs(pages) do
+        local toggle=page.Groups[1]:AddToggle(kind.."_visuals_3d_preview",{Text="Visuals 3D Preview",Default=true})
+        toggle:OnChanged(function(value) Preview.enabled[kind]=value end)
+    end
+    connect(RunService.RenderStepped,function()
+        if Preview.destroyed then return end
+        local ok,err=pcall(Preview.Step,os.clock())
+        if not ok then
+            if Preview.panel then Preview.panel.Visible=false end
+            if Preview.LastError~=tostring(err) then Preview.LastError=tostring(err);warn("[Visuals 3D Preview]",err) end
+        end
+    end)
+    return Preview
+end
+
+local preview=installPreview({Library=Library,Window=Window,Sense=Sense,Player=AimLocalPlayer,
+    Input=AimUIS,RunService=AimRunService,IsAlive=Combat.IsAlive,
+    Pages={players=PlayersPage,npc=NpcPage,zombies=ZombiePage}})
+Combat.Preview=preview
+local destroyWithPreview=Combat.Destroy
+Combat.Destroy=function() preview.Destroy();destroyWithPreview() end
+end
+
 end
 
 do
