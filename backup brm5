@@ -2729,7 +2729,7 @@ do
         AutoSprint=false,AirStrafe=false,AirStrafeSpeed=24,BunnyHop=false,NoJumpDelay=true,
         AutoHeal=false,HealThreshold=75,HealItems={Vitamins=true,Bandage=true,Dressing=true},HealAvoid={},nextHeal=0,nextHealCheck=0,
         Penalties=false,Survival=false,NoFallDamage=false,Fly=false,FlySpeed=40,Modifier=false,Multiplier=2,Noclip=false,
-        speedState={},flyState={},modifierState={}}
+        ThirdPerson=false,ThirdPersonDistance=5,speedState={},flyState={},modifierState={}}
     Combat.Movement=M
     local left=MovementPage:AddSection({Title="Movement",Side="Left"})
     local right=MovementPage:AddSection({Title="Misc",Side="Right"})
@@ -2744,6 +2744,17 @@ do
         Callback=function(v) M.SpeedValue=v end})
     M.speedKey=left:AddKeyPicker({Text="Speed Key",Flag="movement_speed_key",Default=Enum.KeyCode.G,Mode="Toggle",Callback=function() end})
     toggle(left,"No Movement Smoothing","Smoothing")
+    local thirdPersonToggle=left:AddToggle({Text="Third Person",Flag="movement_ThirdPerson",Default=false,
+        Callback=function(value)
+            M.ThirdPerson=value
+            if not value and M.RestoreThirdPerson then M.RestoreThirdPerson(false) end
+        end})
+    thirdPersonToggle:AddKeyPicker("movement_third_person_key",{
+        Text="Third Person",Default="J",Mode="Toggle",SyncToggleState=true,
+    })
+    M.thirdPersonKey=Options.movement_third_person_key
+    left:AddSlider({Text="Camera Distance",Flag="movement_third_person_distance",Min=2,Max=25,Default=5,Rounding=.5,Suffix=" studs",
+        Callback=function(value) M.ThirdPersonDistance=value end})
     toggle(left,"Auto Sprint","AutoSprint")
     toggle(left,"Air Strafe","AirStrafe")
     left:AddSlider({Text="Air Strafe Speed",Flag="movement_air_strafe_speed",Min=1,Max=150,Default=24,Rounding=1,Suffix=" studs/s",
@@ -2792,6 +2803,44 @@ do
         end
         class[key]=wrapper
         table.insert(M.hooks,{class=class,key=key,original=original,wrapper=wrapper})
+    end
+    function M.RestoreThirdPerson(originalState)
+        local state=M.thirdPersonState
+        if not state then return end
+        M.thirdPersonState=nil
+        state.actor.Zoom=originalState and state.zoom or 0
+        state.actor.Focused=not originalState or state.focused
+        state.camera._zoomLerp=originalState and state.zoomLerp or 0
+    end
+    function M.InstallCamera(class)
+        if M.cameraInstalled or type(class.Update)~="function" then return end
+        M.Wrap(class,"Update",function(original,camera,input,dt,...)
+            local actor=camera._localActor
+            if not M.ThirdPerson or actor.Alive==false or camera._lockedFP or actor.UsingBinoculars then
+                M.RestoreThirdPerson(false)
+                return original(camera,input,dt,...)
+            end
+            local state=M.thirdPersonState
+            if state and (state.camera~=camera or state.actor~=actor) then
+                M.RestoreThirdPerson(true);state=nil
+            end
+            if not state then
+                state={camera=camera,actor=actor,zoom=actor.Zoom,focused=actor.Focused,zoomLerp=camera._zoomLerp}
+                M.thirdPersonState=state
+            end
+            -- Use BRM5's own third-person renderer, including shoulder offset and wall collision.
+            local distance=math.clamp(M.ThirdPersonDistance,2,25)
+            local previousZoom=camera._zoomLerp or 0
+            actor.Zoom=distance
+            local result=table.pack(pcall(original,camera,input,dt,...))
+            if not result[1] then M.RestoreThirdPerson(true);error(result[2],0) end
+            actor.Zoom=distance
+            actor.Focused=false
+            -- Some game modes reset Zoom during Update; keep the native interpolation continuous.
+            camera._zoomLerp=previousZoom+(distance-previousZoom)*math.clamp(dt*20,0,1)
+            return table.unpack(result,2,result.n)
+        end)
+        M.cameraInstalled=true
     end
     function M.ResolveActions()
         for _,module in ipairs(getloadedmodules()) do
@@ -3076,6 +3125,7 @@ do
     end
     function M.Destroy()
         M.active=false
+        M.RestoreThirdPerson(true)
         M.RestoreAirSpeed();M.ResetBunny()
         if M.sprintActor and M.sprintController then M.sprintActor.Sprinting=M.sprintController.IsSprinting end
         if M.connection then M.connection:Disconnect() end
@@ -3089,6 +3139,19 @@ do
     Combat.Destroy=function() M.Destroy();oldDestroy() end
     M.connection=AimRunService.Heartbeat:Connect(function()
         local now=tick()
+        if not M.cameraInstalled and now>(M.nextCameraResolve or 0) then
+            M.nextCameraResolve=now+2
+            for _,module in ipairs(getloadedmodules()) do
+                if module.Name=="CharacterCamera" then
+                    local ok,class=pcall(require,module)
+                    if ok and type(class)=="table" then
+                        local installed,err=pcall(M.InstallCamera,class)
+                        if not installed then M.cameraError=tostring(err) end
+                    end
+                    break
+                end
+            end
+        end
         if (M.AutoHeal or M.AutoSprint or M.AirStrafe or M.BunnyHop) and (not M.inputService or not M.medicalInterface)
             and now>(M.nextActionResolve or 0) then
             M.nextActionResolve=now+2
